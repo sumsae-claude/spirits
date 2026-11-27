@@ -9,6 +9,10 @@ var failures: Array[String] = []
 
 
 func _ready() -> void:
+	# 안전장치: 너무 오래 걸리면 끝낸다
+	get_tree().create_timer(1500.0, true, false, true).timeout.connect(func():
+		print("SMOKE FAIL: 시간 초과로 중단")
+		get_tree().quit(2))
 	# 이 노드는 장면이 바뀌어도 남아 있도록 루트에 두고, 빈 노드를 '현재 장면'으로 둔다
 	var ph := Node.new()
 	get_tree().root.add_child.call_deferred(ph)
@@ -422,10 +426,10 @@ func _summoner_turn(b: Node, u: Object) -> void:
 			return
 		b._close_submenu()
 	# 할 일이 없으면 적에게서 멀어지는 칸으로 물러선다 (사람처럼 정령사를 지킴)
-	var safest := u.cell
-	var best_threat := _threat(b, u.cell)
+	var safest: Vector2i = u.cell
+	var best_threat: int = _threat(b, u.cell)
 	for c in b.reachable:
-		var th := _threat(b, c)
+		var th: int = _threat(b, c)
 		if th < best_threat:
 			best_threat = th
 			safest = c

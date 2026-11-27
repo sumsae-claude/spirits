@@ -18,6 +18,7 @@ const SLOTS := ["weapon", "accessory"]
 var species: Dictionary = {}
 var skills: Dictionary = {}
 var equipment: Dictionary = {}
+var terrains: Dictionary = {}
 
 var ui_font: Font
 var theme: Theme
@@ -27,6 +28,7 @@ func _ready() -> void:
 	species = _load_json("res://data/spirits.json")
 	skills = _load_json("res://data/skills.json")
 	equipment = _load_json("res://data/equipment.json")
+	terrains = _load_json("res://data/terrain.json")
 	_setup_theme()
 
 
@@ -94,6 +96,59 @@ func bonus_text(bonus: Dictionary) -> String:
 		if bonus.has(key):
 			parts.append("%s+%d" % [Spirit.STAT_NAMES[key], int(bonus[key])])
 	return " ".join(parts)
+
+
+# ---------------------------------------------------------------- 지형
+
+func terrain_info(tid: String) -> Dictionary:
+	if terrains.has(tid):
+		return terrains[tid]
+	return terrains.get("plain", {})
+
+
+func terrain_name(tid: String) -> String:
+	return str(terrain_info(tid).get("name", tid))
+
+
+func terrain_passable(tid: String) -> bool:
+	return bool(terrain_info(tid).get("passable", true))
+
+
+func terrain_color(tid: String) -> Color:
+	var c = terrain_info(tid).get("color", [0.17, 0.2, 0.26])
+	return Color(float(c[0]), float(c[1]), float(c[2]))
+
+
+## 이 지형 칸에 들어갈 때 드는 이동력
+func terrain_move_cost(tid: String, el: String) -> int:
+	var t := terrain_info(tid)
+	var by: Dictionary = t.get("move_by", {})
+	return int(by.get(el, t.get("move", 1)))
+
+
+## 이 지형 위에서 공격할 때 피해 배율 (공격자 속성 기준)
+func terrain_attack_mult(tid: String, el: String) -> float:
+	var by: Dictionary = terrain_info(tid).get("attack_by", {})
+	return float(by.get(el, 1.0))
+
+
+## 이 지형 위에서 공격받을 때 피해 배율
+func terrain_defense_mult(tid: String) -> float:
+	return float(terrain_info(tid).get("defense", 1.0))
+
+
+## 원거리(최대 사거리 2 이상) 스킬 사거리 보너스
+func terrain_range_bonus(tid: String) -> int:
+	return int(terrain_info(tid).get("range_bonus", 0))
+
+
+## 라운드 시작 시 최대 HP 대비 회복(+)/피해(-) 비율
+func terrain_round_hp(tid: String, el: String) -> float:
+	var t := terrain_info(tid)
+	var regen: Dictionary = t.get("regen_by", {})
+	if regen.has(el):
+		return float(regen[el])
+	return -float(t.get("burn", 0.0))
 
 
 func equipment_desc(eid: String) -> String:

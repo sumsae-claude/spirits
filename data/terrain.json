@@ -1,0 +1,37 @@
+{
+	"plain": {
+		"name": "평지", "color": [0.17, 0.2, 0.26], "passable": true, "move": 1,
+		"desc": "특별한 효과 없음"
+	},
+	"forest": {
+		"name": "숲", "color": [0.13, 0.3, 0.18], "passable": true, "move": 2,
+		"move_by": {"earth": 1},
+		"defense": 0.8,
+		"desc": "이동 2 (흙 1) · 받는 피해 -20%"
+	},
+	"water": {
+		"name": "물가", "color": [0.12, 0.25, 0.42], "passable": true, "move": 2,
+		"move_by": {"water": 1},
+		"attack_by": {"water": 1.2, "fire": 0.8},
+		"regen_by": {"water": 0.1},
+		"desc": "이동 2 (물 1) · 물 피해 +20%, 매 라운드 회복 · 불 피해 -20%"
+	},
+	"hill": {
+		"name": "언덕", "color": [0.36, 0.32, 0.2], "passable": true, "move": 2,
+		"move_by": {"wind": 1},
+		"attack_by": {"wind": 1.2},
+		"range_bonus": 1,
+		"desc": "이동 2 (바람 1) · 바람 피해 +20% · 원거리 스킬 사거리 +1"
+	},
+	"lava": {
+		"name": "용암지대", "color": [0.42, 0.15, 0.1], "passable": true, "move": 1,
+		"attack_by": {"fire": 1.2},
+		"regen_by": {"fire": 0.1},
+		"burn": 0.08,
+		"desc": "불 피해 +20%, 불 정령 매 라운드 회복 · 그 외 매 라운드 8% 화상"
+	},
+	"rock": {
+		"name": "바위", "color": [0.12, 0.12, 0.14], "passable": false, "move": 99,
+		"desc": "지나갈 수 없음"
+	}
+}

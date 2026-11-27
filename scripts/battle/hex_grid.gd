@@ -11,7 +11,8 @@ var cols: int
 var rows: int
 var size: float       # 육각형 중심~꼭짓점 거리
 var origin: Vector2   # (0, 0) 칸의 중심 픽셀 좌표
-var blocked: Dictionary = {}  # Vector2i -> true (바위 등 장애물)
+var blocked: Dictionary = {}  # Vector2i -> true (바위 등 지나갈 수 없는 칸)
+var terrain: Dictionary = {}  # Vector2i -> 지형 id (없으면 "plain")
 
 
 func _init(p_cols: int, p_rows: int, p_size: float, p_origin: Vector2) -> void:
@@ -23,6 +24,10 @@ func _init(p_cols: int, p_rows: int, p_size: float, p_origin: Vector2) -> void:
 
 func in_bounds(c: Vector2i) -> bool:
 	return c.x >= 0 and c.y >= 0 and c.x < cols and c.y < rows
+
+
+func terrain_at(c: Vector2i) -> String:
+	return str(terrain.get(c, "plain"))
 
 
 func is_walkable(c: Vector2i) -> bool:
@@ -83,21 +88,31 @@ func neighbors(c: Vector2i) -> Array[Vector2i]:
 	return result
 
 
-## start에서 move 칸 이내로 갈 수 있는 칸 -> 이동 비용 (start 제외).
+## start에서 이동력 move 이내로 갈 수 있는 칸 -> 누적 이동 비용 (start 제외).
+## cost_fn(칸) -> int 는 그 칸에 들어갈 때 드는 비용. (지형별로 다름)
 ## occupied에 있는 칸(다른 유닛)은 지나갈 수도, 멈출 수도 없다.
-func reachable(start: Vector2i, move: int, occupied: Dictionary) -> Dictionary:
+func reachable(start: Vector2i, move: int, occupied: Dictionary, cost_fn: Callable) -> Dictionary:
 	var costs := {start: 0}
-	var frontier: Array[Vector2i] = [start]
-	while not frontier.is_empty():
-		var cur: Vector2i = frontier.pop_front()
+	var open: Array[Vector2i] = [start]
+	while not open.is_empty():
+		# 비용이 가장 낮은 칸부터 (맵이 작아 선형 탐색으로 충분한 다익스트라)
+		var best_i := 0
+		for i in range(1, open.size()):
+			if int(costs[open[i]]) < int(costs[open[best_i]]):
+				best_i = i
+		var cur: Vector2i = open[best_i]
+		open.remove_at(best_i)
 		var cost: int = costs[cur]
-		if cost >= move:
-			continue
 		for n in neighbors(cur):
-			if costs.has(n) or not is_walkable(n) or occupied.has(n):
+			if not is_walkable(n) or occupied.has(n):
 				continue
-			costs[n] = cost + 1
-			frontier.append(n)
+			var next_cost: int = cost + int(cost_fn.call(n))
+			if next_cost > move:
+				continue
+			if not costs.has(n) or next_cost < int(costs[n]):
+				costs[n] = next_cost
+				if not open.has(n):
+					open.append(n)
 	costs.erase(start)
 	return costs
 

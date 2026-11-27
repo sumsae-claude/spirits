@@ -8,12 +8,16 @@ const DISPEL_RANGE := 1
 const MP_REGEN_PER_ROUND := 2
 
 
-## 피해량 = 공격 × (위력/40) × 20/(20+방어) × 속성배율 × 난수(0.9~1.1)
+## 피해량 = 공격 × (위력/40) × 20/(20+방어) × 속성배율 × 지형배율 × 난수(0.9~1.1)
+## 지형배율 = 공격자 지형의 공격 보정(공격자 속성 기준) × 방어자 지형의 방어 보정
 ## rng가 null이면 난수 없이 기대값을 계산 (AI, 미리보기용).
-static func calc_damage(attacker: Spirit, defender: Spirit, power: int, element: String, rng: RandomNumberGenerator = null) -> int:
+static func calc_damage(attacker: Spirit, defender: Spirit, power: int, element: String,
+		rng: RandomNumberGenerator = null, attacker_terrain: String = "plain", defender_terrain: String = "plain") -> int:
 	var atk := float(attacker.stat("atk"))
 	var defense := float(defender.stat("def"))
 	var mult := GameData.element_multiplier(element, defender.element())
+	mult *= GameData.terrain_attack_mult(attacker_terrain, attacker.element())
+	mult *= GameData.terrain_defense_mult(defender_terrain)
 	var dmg := atk * float(power) / 40.0 * 20.0 / (20.0 + defense) * mult
 	if rng != null:
 		dmg *= rng.randf_range(0.9, 1.1)

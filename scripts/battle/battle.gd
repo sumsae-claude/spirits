@@ -8,17 +8,19 @@ const COLS := 8
 const ROWS := 10
 const HEX_SIZE := 44.0
 const MAP_TOP := 130.0
-const PANEL_HEIGHT := 440.0
+const PANEL_HEIGHT := 460.0
 const ENEMY_DELAY := 0.35
 const ACTION_DELAY := 0.55
-const OBSTACLE_COUNT := 7
 const SPAWN_COLS := [3, 4, 2, 5]
+## [지형 id, 덩어리 개수, 덩어리 크기] — 출발 행(1, 8)을 피해 2~7행에 배치
+const TERRAIN_PLAN := [["forest", 2, 4], ["water", 2, 3], ["hill", 2, 3], ["lava", 1, 3], ["rock", 4, 1]]
+const TERRAIN_ROW_MIN := 2
+const TERRAIN_ROW_MAX := 7
 
 const COLOR_BG := Color(0.07, 0.08, 0.11)
-const COLOR_CELL := Color(0.17, 0.2, 0.26)
-const COLOR_BLOCKED := Color(0.12, 0.12, 0.14)
-const COLOR_MOVE := Color(0.2, 0.38, 0.62)
-const COLOR_ACTIVE_CELL := Color(0.42, 0.4, 0.2)
+const COLOR_MOVE := Color(0.25, 0.5, 0.9)
+const COLOR_TARGET := Color(0.85, 0.2, 0.22)
+const COLOR_ACTIVE_CELL := Color(0.9, 0.8, 0.3)
 const COLOR_OUTLINE := Color(0.35, 0.4, 0.5, 0.6)
 
 var grid: HexGrid
@@ -28,6 +30,7 @@ var turn_index := -1
 var round_num := 0
 var active: BattleUnit = null
 var inspected: BattleUnit = null
+var inspected_cell := Vector2i(-1, -1)  # 유닛 없는 칸을 눌렀을 때 지형 정보 표시용
 ## idle / player / targeting / busy / enemy / over
 var phase := "idle"
 var has_moved := false
@@ -44,6 +47,7 @@ var time := 0.0
 
 var ui_root: Control
 var turn_label: Label
+var legend_label: Label
 var info_label: Label
 var hint_label: Label
 var action_box: GridContainer
@@ -85,7 +89,7 @@ func _setup_units() -> void:
 	if GameState.current_encounter.is_empty():
 		GameState.current_encounter = GameState.make_encounter()
 
-	_place_obstacles()
+	_generate_terrain()
 	for i in GameState.party.size():
 		_add_unit(GameState.party[i], 0, Vector2i(SPAWN_COLS[i], ROWS - 2))
 	for i in GameState.current_encounter.size():
@@ -94,15 +98,43 @@ func _setup_units() -> void:
 	GameState.current_encounter = []
 
 
-func _place_obstacles() -> void:
-	var placed := 0
+func _generate_terrain() -> void:
+	for plan in TERRAIN_PLAN:
+		for i in int(plan[1]):
+			_grow_cluster(str(plan[0]), int(plan[2]))
+
+
+## 빈 칸 하나에서 시작해 이웃으로 번지며 같은 지형 덩어리를 만든다.
+func _grow_cluster(tid: String, cluster_size: int) -> void:
+	var start := Vector2i(-1, -1)
+	for attempt in 30:
+		var c := Vector2i(rng.randi_range(0, COLS - 1), rng.randi_range(TERRAIN_ROW_MIN, TERRAIN_ROW_MAX))
+		if not grid.terrain.has(c):
+			start = c
+			break
+	if start.x < 0:
+		return
+	var cells: Array[Vector2i] = [start]
+	_set_terrain(start, tid)
 	var tries := 0
-	while placed < OBSTACLE_COUNT and tries < 200:
+	while cells.size() < cluster_size and tries < 20:
 		tries += 1
-		var c := Vector2i(rng.randi_range(0, COLS - 1), rng.randi_range(3, ROWS - 4))
-		if not grid.blocked.has(c):
-			grid.blocked[c] = true
-			placed += 1
+		var from: Vector2i = cells[rng.randi() % cells.size()]
+		var options: Array = []
+		for n in grid.neighbors(from):
+			if not grid.terrain.has(n) and n.y >= TERRAIN_ROW_MIN and n.y <= TERRAIN_ROW_MAX:
+				options.append(n)
+		if options.is_empty():
+			continue
+		var pick: Vector2i = options[rng.randi() % options.size()]
+		cells.append(pick)
+		_set_terrain(pick, tid)
+
+
+func _set_terrain(c: Vector2i, tid: String) -> void:
+	grid.terrain[c] = tid
+	if not GameData.terrain_passable(tid):
+		grid.blocked[c] = true
 
 
 func _add_unit(s: Spirit, team: int, cell: Vector2i) -> void:
@@ -115,6 +147,8 @@ func _add_unit(s: Spirit, team: int, cell: Vector2i) -> void:
 
 func _start_round() -> void:
 	round_num += 1
+	if round_num > 1:
+		_apply_round_terrain()
 	turn_queue = []
 	for o in units:
 		var u: BattleUnit = o
@@ -125,6 +159,46 @@ func _start_round() -> void:
 	turn_queue.sort_custom(_compare_speed)
 	turn_index = -1
 	_next_turn()
+
+
+## 라운드 시작 시 지형 효과: 물가/용암의 회복, 용암 화상
+func _apply_round_terrain() -> void:
+	for o in units:
+		var u: BattleUnit = o
+		if not u.is_active():
+			continue
+		var tid := grid.terrain_at(u.cell)
+		var ratio := GameData.terrain_round_hp(tid, u.spirit.element())
+		if ratio == 0.0:
+			continue
+		var amount := maxi(1, int(round(u.spirit.max_hp() * absf(ratio))))
+		if ratio > 0.0:
+			if u.spirit.hp >= u.spirit.max_hp():
+				continue
+			u.spirit.hp = mini(u.spirit.max_hp(), u.spirit.hp + amount)
+			_effect("+%d" % amount, u.draw_pos, Color(0.5, 1.0, 0.6))
+			_log("%s이(가) %s에서 기운을 회복했다. (+%d)" % [u.spirit.display_name(), GameData.terrain_name(tid), amount])
+		else:
+			u.spirit.hp = maxi(0, u.spirit.hp - amount)
+			_effect("-%d" % amount, u.draw_pos, Color(1.0, 0.55, 0.25))
+			_log("%s이(가) %s의 열기에 %d 피해를 입었다." % [u.spirit.display_name(), GameData.terrain_name(tid), amount])
+			if u.spirit.hp <= 0:
+				_knock_out(u)
+
+
+func _move_cost_fn(u: BattleUnit) -> Callable:
+	var el := u.spirit.element()
+	return func(c: Vector2i) -> int: return GameData.terrain_move_cost(grid.terrain_at(c), el)
+
+
+func _reachable_for(u: BattleUnit) -> Dictionary:
+	return grid.reachable(u.cell, u.spirit.stat("mov"), _occupied(u), _move_cost_fn(u))
+
+
+## 지형까지 반영한 피해 계산. use_rng=false면 기대값.
+func _damage(attacker: BattleUnit, from_cell: Vector2i, target: BattleUnit, power: int, element: String, use_rng: bool) -> int:
+	return BattleLogic.calc_damage(attacker.spirit, target.spirit, power, element,
+		rng if use_rng else null, grid.terrain_at(from_cell), grid.terrain_at(target.cell))
 
 
 func _compare_speed(a: BattleUnit, b: BattleUnit) -> bool:
@@ -148,11 +222,12 @@ func _next_turn() -> void:
 	has_moved = false
 	show_skills = false
 	inspected = null
+	inspected_cell = Vector2i(-1, -1)
 	pending = {}
 	targets = {}
 	if active.team == 0:
 		phase = "player"
-		reachable = grid.reachable(active.cell, active.spirit.stat("mov"), _occupied(active))
+		reachable = _reachable_for(active)
 		_mark_ui()
 	else:
 		reachable = {}
@@ -243,6 +318,7 @@ func _on_tap(pos: Vector2) -> void:
 				_move_player(c)
 			else:
 				inspected = u if u != active else null
+				inspected_cell = c if u == null else Vector2i(-1, -1)
 				_mark_ui()
 		"targeting":
 			if targets.has(c):
@@ -274,6 +350,7 @@ func _move_player(c: Vector2i) -> void:
 	phase = "busy"
 	show_skills = false
 	inspected = null
+	inspected_cell = Vector2i(-1, -1)
 	_mark_ui()
 	await _animate_move(active, c)
 	has_moved = true
@@ -360,6 +437,8 @@ func _targets_for(u: BattleUnit, from_cell: Vector2i, action: Dictionary) -> Dic
 			var sk: Dictionary = GameData.skills[action["skill_id"]]
 			rmin = int(sk["range_min"])
 			rmax = int(sk["range_max"])
+			if rmax >= 2:
+				rmax += GameData.terrain_range_bonus(grid.terrain_at(from_cell))
 		"dispel":
 			rmax = BattleLogic.DISPEL_RANGE
 	var result := {}
@@ -379,12 +458,12 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 	var s := u.spirit
 	match str(action["type"]):
 		"attack":
-			var dmg := BattleLogic.calc_damage(s, target.spirit, BattleLogic.BASIC_ATTACK_POWER, s.element(), rng)
+			var dmg := _damage(u, u.cell, target, BattleLogic.BASIC_ATTACK_POWER, s.element(), true)
 			_hit(u, target, dmg, "공격", s.element())
 		"skill":
 			var sk: Dictionary = GameData.skills[action["skill_id"]]
 			s.mp = maxi(0, s.mp - int(sk["mp"]))
-			var skill_dmg := BattleLogic.calc_damage(s, target.spirit, int(sk["power"]), str(sk["element"]), rng)
+			var skill_dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), true)
 			_hit(u, target, skill_dmg, str(sk["name"]), str(sk["element"]))
 		"dispel":
 			_try_dispel(u, target)
@@ -403,13 +482,20 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 	elif mult < 1.0:
 		msg += " (효과가 별로...)"
 		color = Color(0.7, 0.7, 0.8)
+	var def_tid := grid.terrain_at(target.cell)
+	if GameData.terrain_defense_mult(def_tid) < 1.0:
+		msg += " [%s 엄폐]" % GameData.terrain_name(def_tid)
 	_log(msg)
 	_effect(str(dmg), target.draw_pos, color)
 	if target.spirit.hp <= 0:
-		target.alive = false
-		_log("%s이(가) 쓰러졌다!" % target.spirit.display_name())
-		if target.team == 1:
-			defeated.append(target.spirit)
+		_knock_out(target)
+
+
+func _knock_out(target: BattleUnit) -> void:
+	target.alive = false
+	_log("%s이(가) 쓰러졌다!" % target.spirit.display_name())
+	if target.team == 1:
+		defeated.append(target.spirit)
 
 
 func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
@@ -452,7 +538,7 @@ func _run_enemy_turn() -> void:
 ## 이동 가능한 모든 칸 × 모든 행동 × 모든 대상 중 점수가 가장 높은 조합을 고른다.
 ## 공격할 수 없으면 가장 가까운 아군 쪽으로 다가간다.
 func _plan_enemy(u: BattleUnit) -> Dictionary:
-	var cells := grid.reachable(u.cell, u.spirit.stat("mov"), _occupied(u))
+	var cells := _reachable_for(u)
 	cells[u.cell] = 0
 	var actions := [{"type": "attack"}]
 	for sid in u.spirit.known_skills():
@@ -474,10 +560,11 @@ func _plan_enemy(u: BattleUnit) -> Dictionary:
 			var t := _targets_for(u, cell, action)
 			for tcell in t:
 				var target: BattleUnit = t[tcell]
-				var expected := BattleLogic.calc_damage(u.spirit, target.spirit, power, element)
+				var expected := _damage(u, cell, target, power, element, false)
 				var score := float(mini(expected, target.spirit.hp)) - mp_cost * 0.3
 				if expected >= target.spirit.hp:
 					score += 50.0
+				score += _terrain_score(u, cell)
 				score -= int(cells[cell]) * 0.1  # 같은 값이면 덜 움직이는 쪽
 				if score > best_score:
 					best_score = score
@@ -486,13 +573,22 @@ func _plan_enemy(u: BattleUnit) -> Dictionary:
 		return best
 
 	var best_cell := u.cell
-	var best_dist := 9999
+	var best_value := INF
 	for cell in cells:
-		var d := _nearest_foe_distance(u, cell)
-		if d < best_dist:
-			best_dist = d
+		# 가까울수록, 유리한 지형일수록 좋다
+		var value := float(_nearest_foe_distance(u, cell)) - _terrain_score(u, cell) * 0.25
+		if value < best_value:
+			best_value = value
 			best_cell = cell
 	return {"cell": best_cell}
+
+
+## AI가 칸을 고를 때 쓰는 지형 선호도 (엄폐 + 라운드 회복/화상)
+func _terrain_score(u: BattleUnit, cell: Vector2i) -> float:
+	var tid := grid.terrain_at(cell)
+	var score := (1.0 - GameData.terrain_defense_mult(tid)) * 20.0
+	score += GameData.terrain_round_hp(tid, u.spirit.element()) * 40.0
+	return score
 
 
 func _nearest_foe_distance(u: BattleUnit, cell: Vector2i) -> int:
@@ -514,12 +610,12 @@ func _draw() -> void:
 			var center := grid.to_pixel(c)
 			var pts := grid.corners(center, HEX_SIZE - 1.5)
 			draw_colored_polygon(pts, _cell_color(c))
+			_draw_terrain_deco(grid.terrain_at(c), center)
 			var outline := pts.duplicate()
 			outline.append(pts[0])
 			draw_polyline(outline, COLOR_OUTLINE, 2.0)
-			if grid.blocked.has(c):
-				draw_circle(center, HEX_SIZE * 0.45, Color(0.3, 0.28, 0.25))
-				draw_circle(center + Vector2(-6, -6), HEX_SIZE * 0.18, Color(0.4, 0.37, 0.33))
+			if c == inspected_cell:
+				draw_polyline(outline, Color(0.6, 0.9, 1.0), 3.0)
 
 	for o in units:
 		var u: BattleUnit = o
@@ -538,17 +634,46 @@ func _draw() -> void:
 		_draw_text(str(e["text"]), e["pos"] + Vector2(0, -50.0 * float(e["t"]) - 10.0), 28, col)
 
 
+## 지형 색 위에 이동 가능/대상/현재 차례 표시를 섞는다.
 func _cell_color(c: Vector2i) -> Color:
+	var base := GameData.terrain_color(grid.terrain_at(c))
 	if grid.blocked.has(c):
-		return COLOR_BLOCKED
+		return base
 	if phase == "targeting" and targets.has(c):
 		var pulse := 0.5 + 0.5 * sin(time * 6.0)
-		return Color(0.55 + 0.15 * pulse, 0.2, 0.22)
+		return base.lerp(COLOR_TARGET, 0.5 + 0.2 * pulse)
 	if phase == "player" and not has_moved and reachable.has(c):
-		return COLOR_MOVE
+		return base.lerp(COLOR_MOVE, 0.5)
 	if active != null and active.cell == c:
-		return COLOR_ACTIVE_CELL
-	return COLOR_CELL
+		return base.lerp(COLOR_ACTIVE_CELL, 0.35)
+	return base
+
+
+## 지형을 알아볼 수 있게 간단한 도형을 그린다. (아트 작업 전 임시)
+func _draw_terrain_deco(tid: String, center: Vector2) -> void:
+	match tid:
+		"forest":
+			for off in [Vector2(-18, -14), Vector2(16, -16), Vector2(-2, 20)]:
+				var p: Vector2 = center + off
+				draw_colored_polygon(PackedVector2Array([p + Vector2(0, -10), p + Vector2(8, 6), p + Vector2(-8, 6)]),
+					Color(0.2, 0.5, 0.25))
+		"water":
+			for dy in [-18.0, 22.0]:
+				var pts := PackedVector2Array()
+				for i in 9:
+					var x := -20.0 + 5.0 * i
+					pts.append(center + Vector2(x, dy + sin(i * 1.6 + time * 2.0) * 3.0))
+				draw_polyline(pts, Color(0.45, 0.7, 1.0, 0.8), 2.0)
+		"hill":
+			draw_arc(center + Vector2(0, 20), 24.0, PI * 1.1, PI * 1.9, 12, Color(0.6, 0.52, 0.32), 3.0)
+			draw_arc(center + Vector2(-14, -12), 12.0, PI * 1.1, PI * 1.9, 8, Color(0.6, 0.52, 0.32), 2.0)
+		"lava":
+			var glow := 0.6 + 0.4 * sin(time * 3.0)
+			for off in [Vector2(-18, -12), Vector2(17, -8), Vector2(-6, 22), Vector2(14, 18)]:
+				draw_circle(center + off, 4.0, Color(1.0, 0.5, 0.15, glow))
+		"rock":
+			draw_circle(center, HEX_SIZE * 0.45, Color(0.3, 0.28, 0.25))
+			draw_circle(center + Vector2(-6, -6), HEX_SIZE * 0.18, Color(0.4, 0.37, 0.33))
 
 
 func _draw_unit(u: BattleUnit) -> void:
@@ -585,9 +710,9 @@ func _preview_text(t: BattleUnit) -> String:
 			return "%d%%" % int(round(BattleLogic.dispel_chance(active.spirit, t.spirit) * 100.0))
 		"skill":
 			var sk: Dictionary = GameData.skills[pending["skill_id"]]
-			return "-%d" % BattleLogic.calc_damage(active.spirit, t.spirit, int(sk["power"]), str(sk["element"]))
+			return "-%d" % _damage(active, active.cell, t, int(sk["power"]), str(sk["element"]), false)
 		"attack":
-			return "-%d" % BattleLogic.calc_damage(active.spirit, t.spirit, BattleLogic.BASIC_ATTACK_POWER, active.spirit.element())
+			return "-%d" % _damage(active, active.cell, t, BattleLogic.BASIC_ATTACK_POWER, active.spirit.element(), false)
 	return ""
 
 
@@ -608,12 +733,22 @@ func _build_ui() -> void:
 
 	turn_label = Label.new()
 	turn_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	turn_label.offset_top = 36
-	turn_label.offset_bottom = 110
+	turn_label.offset_top = 28
+	turn_label.offset_bottom = 76
 	turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	turn_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	turn_label.add_theme_font_size_override("font_size", 28)
 	ui_root.add_child(turn_label)
+
+	legend_label = Label.new()
+	legend_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	legend_label.offset_top = 78
+	legend_label.offset_bottom = 112
+	legend_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	legend_label.add_theme_font_size_override("font_size", 18)
+	legend_label.add_theme_color_override("font_color", UIKit.MUTED)
+	legend_label.text = "숲 엄폐 · 물가 물↑불↓ · 언덕 바람↑ 사거리+1 · 용암 불↑ 화상"
+	ui_root.add_child(legend_label)
 
 	var panel := PanelContainer.new()
 	panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -664,7 +799,12 @@ func _rebuild_ui() -> void:
 		turn_label.text = "라운드 %d · %s %s의 차례" % [round_num, who, active.spirit.display_name()]
 	elif phase == "over":
 		turn_label.text = "전투 종료"
-	info_label.text = _unit_info(inspected if inspected != null else active)
+	if inspected != null:
+		info_label.text = _unit_info(inspected)
+	elif grid.in_bounds(inspected_cell):
+		info_label.text = _terrain_info(inspected_cell)
+	else:
+		info_label.text = _unit_info(active)
 
 	match phase:
 		"player":
@@ -706,10 +846,26 @@ func _unit_info(u: BattleUnit) -> String:
 		return ""
 	var s := u.spirit
 	var tag := "아군" if u.team == 0 else "야생"
-	return "[%s] %s  Lv.%d  %s 속성\nHP %d/%d   MP %d/%d   공%d 방%d 속%d 이동%d" % [
+	return "[%s] %s  Lv.%d  %s 속성\nHP %d/%d   MP %d/%d   공%d 방%d 속%d 이동%d\n%s" % [
 		tag, s.display_name(), s.level, GameData.element_name(s.element()),
 		s.hp, s.max_hp(), s.mp, s.max_mp(),
-		s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov")]
+		s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"),
+		_terrain_line(u.cell)]
+
+
+func _terrain_line(c: Vector2i) -> String:
+	var tid := grid.terrain_at(c)
+	var info := GameData.terrain_info(tid)
+	return "지형: %s — %s" % [GameData.terrain_name(tid), str(info.get("desc", ""))]
+
+
+func _terrain_info(c: Vector2i) -> String:
+	var tid := grid.terrain_at(c)
+	var text := "[지형] %s\n%s" % [GameData.terrain_name(tid), str(GameData.terrain_info(tid).get("desc", ""))]
+	if active != null and GameData.terrain_passable(tid):
+		text += "\n%s의 진입 비용: %d" % [active.spirit.display_name(),
+			GameData.terrain_move_cost(tid, active.spirit.element())]
+	return text
 
 
 func _log(text: String) -> void:

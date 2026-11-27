@@ -4,3 +4,4 @@ build/
 *.aab
 *.keystore
 export_credentials.cfg
+*.zip

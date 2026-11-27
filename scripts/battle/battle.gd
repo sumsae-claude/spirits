@@ -10,25 +10,25 @@ extends Node2D
 ## 정령사가 쓰러지면 패배. 적을 모두 쓰러뜨리거나 계약하면, 또는 적 정령사를 쓰러뜨리면 승리.
 
 const COLS := 8
-const ROWS := 10
-const HEX_SIZE := 44.0
-const MAP_TOP := 130.0
-const PANEL_HEIGHT := 460.0
-const ENEMY_DELAY := 0.35
+const ROWS := 12
+const HEX_SIZE := 46.0
+const MAP_TOP := 84.0          # 위쪽 HUD(라운드·배속) 높이
+const ENEMY_DELAY := 0.25
 const ACTION_DELAY := 0.3
 const ENEMY_SPAWN_COLS := [3, 4, 2, 5]
-const SUMMONER_CELL := Vector2i(3, 9)   # 맨 아래 행
-const VANGUARD_CELL := Vector2i(3, 8)   # 정령사 바로 위
-const ENEMY_SUMMONER_CELL := Vector2i(4, 0)  # 맨 위 행
-const ENEMY_VANGUARD_CELL := Vector2i(4, 1)  # 적 정령사 바로 아래
+const SUMMONER_CELL := Vector2i(3, 11)   # 맨 아래 행
+const VANGUARD_CELL := Vector2i(3, 10)   # 정령사 바로 위
+const ENEMY_SUMMONER_CELL := Vector2i(4, 1)  # 위에서 둘째 행 (뒤로 물러설 칸을 남김)
+const ENEMY_VANGUARD_CELL := Vector2i(4, 2)  # 적 정령사 바로 아래
+const WILD_SPAWN_ROW := 2
 ## 적 정령사가 아군과 유지하려는 거리
 const ENEMY_SUMMONER_KEEP_DISTANCE := 3.0
 ## 소환되지 않은 계약 정령이 받는 경험치 비율
 const BENCH_XP_RATIO := 0.3
-## [지형 id, 덩어리 개수, 덩어리 크기] — 출발 행(0~1, 8~9)을 피해 2~7행에 배치
-const TERRAIN_PLAN := [["circle", 2, 1], ["forest", 2, 4], ["water", 2, 3], ["hill", 2, 3], ["lava", 1, 3], ["rock", 4, 1]]
-const TERRAIN_ROW_MIN := 2
-const TERRAIN_ROW_MAX := 7
+## [지형 id, 덩어리 개수, 덩어리 크기] — 출발 행(0~2, 9~11)을 피해 3~8행에 배치
+const TERRAIN_PLAN := [["circle", 2, 1], ["forest", 3, 4], ["water", 2, 3], ["hill", 2, 3], ["lava", 1, 3], ["rock", 5, 1]]
+const TERRAIN_ROW_MIN := 3
+const TERRAIN_ROW_MAX := 8
 
 const COLOR_BG := Color(0.07, 0.08, 0.11)
 const COLOR_MOVE := Color(0.25, 0.5, 0.9)
@@ -36,7 +36,7 @@ const COLOR_TARGET := Color(0.85, 0.2, 0.22)
 const COLOR_ALLY_TARGET := Color(0.3, 0.85, 0.75)
 const COLOR_PLACE := Color(0.55, 0.85, 1.0)
 const COLOR_ACTIVE_CELL := Color(0.9, 0.8, 0.3)
-const COLOR_OUTLINE := Color(0.35, 0.4, 0.5, 0.6)
+const COLOR_OUTLINE := Color(0.06, 0.06, 0.1, 0.32)
 const COLOR_OWNED_RING := Color(0.75, 0.4, 0.95)
 const COLOR_INSPECT_MOVE := Color(0.95, 0.65, 0.2)
 const COLOR_ADV_GOOD := Color(0.3, 0.9, 0.4)    # 상성 유리
@@ -52,7 +52,7 @@ var enemy_summoner_unit: BattleUnit = null  # 정령사 대결일 때만
 var enemy_bench: Array = []                 # 적 정령사가 아직 소환하지 않은 정령
 var stage: Dictionary = {}                  # 스토리 스테이지 전투일 때 {"id", "name", "guardian"}
 var guardian_unit: BattleUnit = null        # 수호 정령 보스
-const GUARDIAN_CELL := Vector2i(4, 0)
+const GUARDIAN_CELL := Vector2i(4, 1)
 const GUARDIAN_REVEAL_RATIO := 0.3
 const GUARDIAN_DISPEL_BONUS := 0.3
 var active: BattleUnit = null
@@ -89,9 +89,18 @@ var rng := RandomNumberGenerator.new()
 var font: Font
 var time := 0.0
 
+var map_bottom := 0.0          # 맵 아래 끝 (그 아래는 명령 패널)
+var bg_tex: Texture2D = null    # 지역 배경 (도트)
+var tile_tex: Dictionary = {}   # 지형 id -> 헥스 타일 텍스처
 var ui_root: Control
+var speed_button: Button
+var unit_icon: TextureRect
+var tut_bubble: PanelContainer
+var tut_icon: TextureRect
+var tut_label: Label
+var tut_queue: Array = []       # 보여 줄 튜토리얼 단계
+var tut_focus: Array = []       # 튜토리얼이 가리키는 칸 (Vector2i)
 var turn_label: Label
-var legend_label: RichTextLabel
 var info_label: Label
 var hint_label: Label
 var action_box: GridContainer
@@ -102,7 +111,7 @@ var _ui_dirty := true
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST  # 도트가 흐려지지 않게
-	battle_speed = int(GameState.flags.get("battle_speed", 1))
+	battle_speed = clampi(int(GameState.flags.get("battle_speed", 1)), 1, 3)
 	Engine.time_scale = float(battle_speed)
 	rng.randomize()
 	font = GameData.ui_font
@@ -111,9 +120,12 @@ func _ready() -> void:
 	var total_w := hex_w * COLS + hex_w * 0.5
 	var origin := Vector2((vp_w - total_w) * 0.5 + hex_w * 0.5, MAP_TOP + HEX_SIZE)
 	grid = HexGrid.new(COLS, ROWS, HEX_SIZE, origin)
+	map_bottom = origin.y + 1.5 * HEX_SIZE * float(ROWS - 1) + HEX_SIZE
 	_build_ui()
 	_setup_units()
+	_load_battle_art()
 	_start_round()
+	_tutorial("start")
 
 
 func _exit_tree() -> void:
@@ -121,10 +133,10 @@ func _exit_tree() -> void:
 
 
 func _toggle_speed() -> void:
-	battle_speed = 2 if battle_speed == 1 else 1
+	battle_speed = battle_speed % 3 + 1   # 1 → 2 → 3 → 1
 	Engine.time_scale = float(battle_speed)
 	GameState.flags["battle_speed"] = battle_speed
-	_mark_ui()
+	_update_speed_button()
 
 
 func _process(delta: float) -> void:
@@ -168,7 +180,7 @@ func _setup_units() -> void:
 		_setup_rival(GameState.current_rival)
 	else:
 		for i in GameState.current_encounter.size():
-			_add_unit(GameState.current_encounter[i], 1, Vector2i(ENEMY_SPAWN_COLS[i % ENEMY_SPAWN_COLS.size()], 1))
+			_add_unit(GameState.current_encounter[i], 1, Vector2i(ENEMY_SPAWN_COLS[i % ENEMY_SPAWN_COLS.size()], WILD_SPAWN_ROW))
 		if not GameState.current_encounter.is_empty():
 			_log("야생 정령 %d마리가 나타났다!" % GameState.current_encounter.size())
 	if not stage.is_empty() and stage.get("guardian") != null:
@@ -334,6 +346,8 @@ func _start_round() -> void:
 	if _check_end():
 		return
 	_start_player_phase()
+	if round_num == 2:
+		_tutorial("round2")
 
 
 # ---------------------------------------------------------------- 아군 턴
@@ -383,6 +397,7 @@ func _select_unit(u: BattleUnit) -> void:
 	reachable = _reachable_for(u)
 	phase = "player"
 	_mark_ui()
+	_tutorial("select_summoner" if u.is_summoner else "select")
 
 
 func _deselect() -> void:
@@ -423,6 +438,7 @@ func _start_enemy_phase() -> void:
 	_clear_selection()
 	phase = "enemy"
 	_mark_ui()
+	_tutorial("enemy_phase")
 	var order := []
 	for o in units:
 		var u: BattleUnit = o
@@ -503,6 +519,9 @@ func _check_end() -> bool:
 func _finish(victory: bool) -> void:
 	phase = "over"
 	active = null
+	tut_queue.clear()
+	tut_focus = []
+	tut_bubble.visible = false
 	var lines: Array[String] = []
 	if victory:
 		var total_xp := 0
@@ -598,7 +617,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	var mb := event as InputEventMouseButton
 	if not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
 		return
-	if mb.position.y > get_viewport_rect().size.y - PANEL_HEIGHT:
+	if mb.position.y > map_bottom + 4.0 or mb.position.y < MAP_TOP:
 		return
 	_on_tap(mb.position)
 
@@ -784,6 +803,7 @@ func _move_player(c: Vector2i) -> void:
 	reachable = {}
 	phase = "player"
 	_mark_ui()
+	_tutorial("moved")
 
 
 func _move_then_menu(c: Vector2i, t: BattleUnit) -> void:
@@ -940,6 +960,7 @@ func _open_target_menu(t: BattleUnit) -> void:
 	submenu = ""
 	phase = "choose"
 	_mark_ui()
+	_tutorial("choose")
 
 
 func _cancel_choose() -> void:
@@ -1200,6 +1221,7 @@ func _try_counter(attacker: BattleUnit, defender: BattleUnit) -> void:
 		return
 	await get_tree().create_timer(0.12).timeout
 	_log("%s의 반격!" % defender.spirit.display_name())
+	_tutorial("counter")
 	await _anim_melee(defender, attacker, defender.spirit.element())
 	_hit(defender, attacker, _counter_damage(defender, attacker, true), "반격", defender.spirit.element())
 
@@ -1336,6 +1358,8 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 	_hit_react(target)
 	if target.spirit.hp <= 0:
 		_knock_out(target)
+	elif target.team == 1 and not target.is_summoner and not target.is_guardian and target.spirit.hp * 2 < target.spirit.max_hp():
+		_tutorial("weak")
 	_check_guardian_reveal(target)
 
 
@@ -1381,6 +1405,7 @@ func _check_guardian_reveal(t: BattleUnit) -> void:
 		t.revealed = true
 		_log("%s의 엉킨 실이 드러났다! 지금 디스펠하면 구할 수 있다!" % t.spirit.display_name())
 		_effect("실이 드러났다!", t.draw_pos + Vector2(0, -20), Color(1.0, 0.9, 0.5))
+		_tutorial("revealed")
 
 
 func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
@@ -1404,6 +1429,7 @@ func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
 			_log("디스펠 성공! %s을(를) 적 정령사에게서 빼앗아 계약했다!" % target.spirit.display_name())
 		else:
 			_log("디스펠 성공! %s과(와) 계약했다!" % target.spirit.display_name())
+			_tutorial("captured")
 		_effect("계약!", target.draw_pos, Color(0.5, 1.0, 0.7))
 	else:
 		_log("디스펠 실패! %s이(가) 저항했다." % target.spirit.display_name())
@@ -1629,17 +1655,28 @@ func _nearest_foe_distance(u: BattleUnit, cell: Vector2i) -> int:
 func _draw() -> void:
 	_update_inspect_overlay()
 	_update_active_overlay()
-	draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), COLOR_BG)
+	_draw_background()
+	var tile_size := Vector2(HexGrid.SQRT3 * HEX_SIZE, HEX_SIZE * 2.0)
 	for row in ROWS:
 		for col in COLS:
 			var c := Vector2i(col, row)
 			var center := grid.to_pixel(c)
 			var pts := grid.corners(center, HEX_SIZE - 1.5)
-			draw_colored_polygon(pts, _cell_color(c))
-			_draw_terrain_deco(grid.terrain_at(c), center)
+			var tid := grid.terrain_at(c)
+			var tile: Texture2D = tile_tex.get(tid, null)
+			if tile != null:
+				draw_texture_rect(tile, Rect2(center - tile_size * 0.5, tile_size), false)
+			elif bg_tex != null:
+				draw_colored_polygon(pts, Color(1, 1, 1, 0.055))  # 평지: 배경이 비치게
+			else:
+				draw_colored_polygon(pts, GameData.terrain_color(tid))
+			_draw_terrain_deco(tid, center)
 			var outline := pts.duplicate()
 			outline.append(pts[0])
 			draw_polyline(outline, COLOR_OUTLINE, 2.0)
+			var over := _cell_overlay(c)
+			if over.a > 0.0:
+				draw_colored_polygon(grid.corners(center, HEX_SIZE - 3.0), over)
 			if c == inspected_cell:
 				draw_polyline(outline, Color(0.6, 0.9, 1.0), 3.0)
 			if range_cells.has(c):
@@ -1654,6 +1691,7 @@ func _draw() -> void:
 			_draw_unit(u)
 	_draw_target_marks()
 	_draw_fx()
+	_draw_tutorial_focus()
 
 	if phase == "targeting":
 		for tcell in targets:
@@ -1667,34 +1705,33 @@ func _draw() -> void:
 		_draw_text(str(e["text"]), e["pos"] + Vector2(0, -50.0 * float(e["t"]) - 10.0), 28, col)
 
 
-## 지형 색 위에 이동 가능/대상/현재 차례 표시를 섞는다.
-func _cell_color(c: Vector2i) -> Color:
-	var base := GameData.terrain_color(grid.terrain_at(c))
+## 지형 위에 덧칠할 표시 색 (이동 가능/대상/현재 차례). 알파 = 진하기, 표시 없음은 투명.
+func _cell_overlay(c: Vector2i) -> Color:
 	if grid.blocked.has(c):
-		return base
+		return Color(0, 0, 0, 0)
 	var pulse := 0.5 + 0.5 * sin(time * 6.0)
 	var adv := _advantage_color(c)
 	if phase == "targeting" and targets.has(c):
 		if _pending_targets_allies():
-			return base.lerp(COLOR_ALLY_TARGET, 0.5 + 0.2 * pulse)
-		return base.lerp(adv if adv.a > 0.0 else COLOR_TARGET, 0.5 + 0.25 * pulse)
+			return Color(COLOR_ALLY_TARGET, 0.5 + 0.2 * pulse)
+		return Color(adv if adv.a > 0.0 else COLOR_TARGET, 0.5 + 0.25 * pulse)
 	if phase == "choose" and choose_target != null and choose_target.cell == c:
 		var tint2 := COLOR_ALLY_TARGET if choose_target.team == 0 else COLOR_TARGET
-		return base.lerp(tint2, 0.5 + 0.2 * pulse)
+		return Color(tint2, 0.5 + 0.2 * pulse)
 	if adv.a > 0.0 and phase in ["player", "choose", "targeting"]:
-		return base.lerp(adv, 0.45)
+		return Color(adv, 0.45)
 	if phase == "placing" and place_cells.has(c):
-		return base.lerp(COLOR_PLACE, 0.45 + 0.2 * pulse)
+		return Color(COLOR_PLACE, 0.45 + 0.2 * pulse)
 	if phase == "player" and not has_moved and reachable.has(c):
-		return base.lerp(COLOR_MOVE, 0.85 if c == preview_cell else 0.45)
+		return Color(COLOR_MOVE, 0.7 if c == preview_cell else 0.42)
 	if active != null and active.cell == c:
-		return base.lerp(COLOR_ACTIVE_CELL, 0.35)
+		return Color(COLOR_ACTIVE_CELL, 0.35)
 	if phase in ["select", "player"]:
 		if inspect_move.has(c):
-			return base.lerp(COLOR_INSPECT_MOVE, 0.4)
+			return Color(COLOR_INSPECT_MOVE, 0.4)
 		if inspect_threat.has(c):
-			return base.lerp(COLOR_INSPECT_THREAT, 0.3)
-	return base
+			return Color(COLOR_INSPECT_THREAT, 0.3)
+	return Color(0, 0, 0, 0)
 
 
 ## 선택한 아군이 c에 있는 적을 칠 때의 상성 색: 초록 유리 / 노랑 보통 / 회색 불리. 해당 없음은 투명.
@@ -1719,8 +1756,20 @@ func _advantage_color(c: Vector2i) -> Color:
 	return COLOR_ADV_EVEN
 
 
-## 지형을 알아볼 수 있게 간단한 도형을 그린다. (아트 작업 전 임시)
+## 지형 위 움직이는 효과(물결·용암 빛·마법진 빛). 타일 그림이 없으면 간단한 도형으로 대신한다.
 func _draw_terrain_deco(tid: String, center: Vector2) -> void:
+	if tile_tex.has(tid):
+		match tid:
+			"water":
+				var wp := PackedVector2Array()
+				for i in 7:
+					wp.append(center + Vector2(-18.0 + 6.0 * i, 6.0 + sin(i * 1.6 + time * 2.0) * 2.5))
+				draw_polyline(wp, Color(0.8, 0.92, 1.0, 0.45), 2.0)
+			"lava":
+				draw_circle(center, HEX_SIZE * 0.55, Color(1.0, 0.45, 0.1, 0.10 + 0.08 * sin(time * 3.0)))
+			"circle":
+				draw_arc(center, HEX_SIZE * 0.62, 0.0, TAU, 32, Color(0.8, 0.65, 1.0, 0.35 + 0.35 * sin(time * 2.5)), 2.5)
+		return
 	match tid:
 		"forest":
 			for off in [Vector2(-18, -14), Vector2(16, -16), Vector2(-2, 20)]:
@@ -1754,6 +1803,46 @@ func _draw_terrain_deco(tid: String, center: Vector2) -> void:
 		"rock":
 			draw_circle(center, HEX_SIZE * 0.45, Color(0.3, 0.28, 0.25))
 			draw_circle(center + Vector2(-6, -6), HEX_SIZE * 0.18, Color(0.4, 0.37, 0.33))
+
+
+## 지역 배경: 화면을 꽉 채우도록 확대 (도트라 NEAREST)
+func _draw_background() -> void:
+	var vp := get_viewport_rect().size
+	if bg_tex == null:
+		draw_rect(Rect2(Vector2.ZERO, vp), COLOR_BG)
+		return
+	var ts := bg_tex.get_size()
+	var k := maxf(vp.x / ts.x, vp.y / ts.y)
+	var sz := ts * k
+	draw_texture_rect(bg_tex, Rect2((vp - sz) * 0.5, sz), false)
+
+
+## 전투 지역: 스토리 = 고향, 정령사 대결 = 상대 속성, 야생 = 가장 많은 적의 속성
+func _battle_region() -> String:
+	if not stage.is_empty():
+		return GameState.home_element()
+	if enemy_summoner_unit != null:
+		return enemy_summoner_unit.spirit.element()
+	var count := {}
+	var best := GameState.home_element()
+	var best_n := 0
+	for o in units:
+		var u: BattleUnit = o
+		if u.team == 1:
+			var el := u.spirit.element()
+			count[el] = int(count.get(el, 0)) + 1
+			if int(count[el]) > best_n:
+				best_n = int(count[el])
+				best = el
+	return best
+
+
+func _load_battle_art() -> void:
+	bg_tex = GameData.battle_tex("bg_" + _battle_region())
+	for tid in ["forest", "water", "hill", "lava", "circle", "rock"]:
+		var t := GameData.battle_tex("tile_" + tid)
+		if t != null:
+			tile_tex[tid] = t
 
 
 func _draw_unit(u: BattleUnit) -> void:
@@ -2046,59 +2135,324 @@ func _build_ui() -> void:
 	ui_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	layer.add_child(ui_root)
 
+	# ---- 위쪽 HUD: 라운드 알약 / 도움말 / 배속
+	var turn_pill := PanelContainer.new()
+	turn_pill.position = Vector2(14, 14)
+	turn_pill.custom_minimum_size = Vector2(0, 56)
+	turn_pill.add_theme_stylebox_override("panel", _pill_style(Color(0.07, 0.08, 0.12, 0.82), UIKit.GOLD.darkened(0.25), 28))
+	turn_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(turn_pill)
 	turn_label = Label.new()
-	turn_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	turn_label.offset_top = 20
-	turn_label.offset_bottom = 64
-	turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	turn_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	turn_label.add_theme_font_size_override("font_size", 28)
-	ui_root.add_child(turn_label)
+	turn_label.add_theme_font_size_override("font_size", 23)
+	turn_pill.add_child(turn_label)
 
-	legend_label = RichTextLabel.new()
-	legend_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	legend_label.offset_top = 66
-	legend_label.offset_bottom = 128
-	legend_label.bbcode_enabled = true
-	legend_label.scroll_active = false
-	legend_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	legend_label.add_theme_font_size_override("normal_font_size", 19)
-	legend_label.text = "[center]상성  %s   [color=#9aa3b5](▶ 방향으로 공격하면 ×1.5)[/color]\n[font_size=16][color=#9aa3b5]적 칸 색: [color=#4de566]유리[/color]/[color=#f2cc4d]보통[/color]/[color=#80808f]불리[/color] · 숲 엄폐 · 물가 물↑불↓ · 언덕 바람↑ · 용암 불↑화상 · 마법진 회복[/color][/font_size][/center]" % GameData.element_chart_bbcode()
-	ui_root.add_child(legend_label)
+	var right := HBoxContainer.new()
+	right.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	right.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	right.offset_top = 14
+	right.offset_right = -14
+	right.add_theme_constant_override("separation", 10)
+	ui_root.add_child(right)
+	var help := _hud_button("?", _show_help)
+	help.custom_minimum_size = Vector2(56, 56)
+	right.add_child(help)
+	speed_button = _hud_button("", _toggle_speed)
+	speed_button.custom_minimum_size = Vector2(132, 56)
+	right.add_child(speed_button)
+	_update_speed_button()
 
+	# ---- 아래쪽 명령 패널 (맵 바로 아래부터 화면 끝까지)
 	var panel := PanelContainer.new()
-	panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	panel.offset_top = -PANEL_HEIGHT
-	panel.offset_bottom = 0
+	panel.anchor_left = 0.0
+	panel.anchor_right = 1.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 1.0
+	panel.offset_top = map_bottom + 6.0
+	panel.offset_bottom = 12.0
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.11, 0.12, 0.17, 0.97)
-	style.border_width_top = 2
-	style.border_color = Color(0.35, 0.4, 0.55)
+	style.bg_color = Color(0.07, 0.08, 0.12, 0.95)
+	style.border_width_top = 3
+	style.border_color = UIKit.GOLD.darkened(0.3)
+	style.corner_radius_top_left = 20
+	style.corner_radius_top_right = 20
+	style.shadow_color = Color(0, 0, 0, 0.45)
+	style.shadow_size = 10
 	panel.add_theme_stylebox_override("panel", style)
 	ui_root.add_child(panel)
 
 	var margin := MarginContainer.new()
-	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 18)
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 22)
 	panel.add_child(margin)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 8)
+	vb.add_theme_constant_override("separation", 6)
 	margin.add_child(vb)
 
-	info_label = UIKit.label("", 23)
-	vb.add_child(info_label)
-	hint_label = UIKit.label("", 21, UIKit.GOLD)
+	var card := HBoxContainer.new()
+	card.add_theme_constant_override("separation", 10)
+	vb.add_child(card)
+	unit_icon = TextureRect.new()
+	unit_icon.custom_minimum_size = Vector2(56, 56)
+	unit_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	unit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	unit_icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	card.add_child(unit_icon)
+	info_label = UIKit.label("", 19)
+	card.add_child(info_label)
+
+	hint_label = UIKit.label("", 19, UIKit.GOLD)
 	vb.add_child(hint_label)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(scroll)
 	action_box = GridContainer.new()
 	action_box.columns = 4
-	action_box.add_theme_constant_override("h_separation", 10)
-	action_box.add_theme_constant_override("v_separation", 10)
+	action_box.add_theme_constant_override("h_separation", 8)
+	action_box.add_theme_constant_override("v_separation", 8)
 	action_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vb.add_child(action_box)
-	log_label = UIKit.label("", 19, UIKit.MUTED)
-	log_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(action_box)
+	log_label = UIKit.label("", 17, UIKit.MUTED)
 	log_label.clip_text = true
+	log_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	vb.add_child(log_label)
+
+	_build_tutorial_bubble()
+
+
+func _pill_style(bg: Color, border: Color, radius: int) -> StyleBoxFlat:
+	var st := StyleBoxFlat.new()
+	st.bg_color = bg
+	st.border_color = border
+	st.set_border_width_all(2)
+	st.set_corner_radius_all(radius)
+	st.content_margin_left = 20
+	st.content_margin_right = 20
+	st.shadow_color = Color(0, 0, 0, 0.35)
+	st.shadow_size = 4
+	return st
+
+
+## HUD용 둥근 버튼 (어두운 바탕 + 금테, 누르면 밝아짐)
+func _hud_button(text: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 23)
+	b.add_theme_color_override("font_color", UIKit.GOLD)
+	b.add_theme_color_override("font_hover_color", Color(1, 0.95, 0.75))
+	b.add_theme_color_override("font_pressed_color", Color(0.1, 0.08, 0.05))
+	var normal := _pill_style(Color(0.07, 0.08, 0.12, 0.85), UIKit.GOLD.darkened(0.25), 28)
+	normal.content_margin_left = 12
+	normal.content_margin_right = 12
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.border_color = UIKit.GOLD
+	hover.bg_color = Color(0.13, 0.13, 0.18, 0.92)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = UIKit.GOLD
+	pressed.border_color = Color(1, 0.95, 0.75)
+	b.add_theme_stylebox_override("normal", normal)
+	b.add_theme_stylebox_override("hover", hover)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.pressed.connect(cb)
+	return b
+
+
+## 배속 표시: ▶ ×1 / ▶▶ ×2 / ▶▶▶ ×3 (빠를수록 밝은 금색)
+func _update_speed_button() -> void:
+	if speed_button == null:
+		return
+	speed_button.text = "%s ×%d" % ["▶".repeat(battle_speed), battle_speed]
+	var col := UIKit.GOLD if battle_speed == 1 else Color(1.0, 0.95, 0.6)
+	speed_button.add_theme_color_override("font_color", col)
+	var st := speed_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if st != null:
+		st.border_color = UIKit.GOLD.darkened(0.25) if battle_speed == 1 else Color(1.0, 0.8, 0.3)
+		st.bg_color = Color(0.07, 0.08, 0.12, 0.85) if battle_speed == 1 else Color(0.22, 0.16, 0.06, 0.9)
+
+
+## 도움말: 상성·지형·조작 요약 (예전 상단 범례를 옮김)
+func _show_help() -> void:
+	var overlay := ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.7)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui_root.add_child(overlay)
+	var vb := UIKit.screen(overlay, 120, 120, false)
+	vb.add_child(UIKit.label("전투 도움말", 36, UIKit.GOLD, true))
+	var rt := RichTextLabel.new()
+	rt.bbcode_enabled = true
+	rt.fit_content = true
+	rt.add_theme_font_size_override("normal_font_size", 22)
+	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b]\n숲: 받는 피해 -20%%\n물가: 물↑ 불↓, 물 정령 회복\n언덕: 바람↑, 원거리 사거리 +1\n용암: 불↑, 그 밖엔 화상\n마법진: 라운드마다 HP·MP 회복\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n근접 공격을 받고 버티면 반격 (스킬엔 반격 없음)" % GameData.element_chart_bbcode()
+	vb.add_child(rt)
+	vb.add_child(UIKit.spacer())
+	vb.add_child(UIKit.button("닫기", overlay.queue_free))
+
+
+# ---------------------------------------------------------------- 튜토리얼 (전투 중 안내)
+## data/chapter1.json "tutorials": {"<스테이지 id>" 또는 "*": [{"id", "on", "s", "t", "focus"}]}
+##  - on: 이 이벤트가 일어나면 표시 (start, select, select_summoner, moved, choose, weak, captured,
+##        counter, enemy_phase, round2, revealed, summon)
+##  - focus: 가리킬 칸 (allies, summoner, enemies, enemy_summoner, weak, circle, guardian) — 금빛 테두리 + 화살표
+##  - 한 번 본 안내는 GameState.flags["tut_<id>"]에 기록해 다시 나오지 않는다.
+
+func _build_tutorial_bubble() -> void:
+	tut_bubble = PanelContainer.new()
+	tut_bubble.anchor_left = 0.0
+	tut_bubble.anchor_right = 1.0
+	tut_bubble.offset_left = 16
+	tut_bubble.offset_right = -16
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.98, 0.95, 0.86, 0.97)
+	st.border_color = Color(0.55, 0.4, 0.2)
+	st.set_border_width_all(3)
+	st.set_corner_radius_all(16)
+	st.content_margin_left = 12
+	st.content_margin_right = 16
+	st.content_margin_top = 10
+	st.content_margin_bottom = 10
+	st.shadow_color = Color(0, 0, 0, 0.4)
+	st.shadow_size = 8
+	tut_bubble.add_theme_stylebox_override("panel", st)
+	tut_bubble.mouse_filter = Control.MOUSE_FILTER_STOP
+	tut_bubble.gui_input.connect(_on_tut_input)
+	tut_bubble.visible = false
+	ui_root.add_child(tut_bubble)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tut_bubble.add_child(row)
+	tut_icon = TextureRect.new()
+	tut_icon.custom_minimum_size = Vector2(96, 96)
+	tut_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tut_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tut_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(tut_icon)
+	var col := VBoxContainer.new()
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(col)
+	tut_label = UIKit.label("", 21, Color(0.2, 0.15, 0.12))
+	tut_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(tut_label)
+	var tap := UIKit.label("눌러서 닫기 ▶", 16, Color(0.5, 0.4, 0.3))
+	tap.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	tap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(tap)
+
+
+func _tutorial_steps() -> Array:
+	var all: Dictionary = GameData.chapter1.get("tutorials", {})
+	var result: Array = []
+	if not stage.is_empty():
+		result.append_array(all.get(str(stage["id"]), []))
+	result.append_array(all.get("*", []))
+	return result
+
+
+## 이벤트가 일어났을 때 아직 안 본 안내가 있으면 띄운다.
+func _tutorial(event: String) -> void:
+	for o in _tutorial_steps():
+		var step: Dictionary = o
+		if str(step.get("on", "")) != event:
+			continue
+		var key := "tut_" + str(step.get("id", ""))
+		if bool(GameState.flags.get(key, false)):
+			continue
+		GameState.flags[key] = true
+		tut_queue.append(step)
+		break
+	if not tut_bubble.visible:
+		_show_next_tutorial()
+
+
+func _show_next_tutorial() -> void:
+	tut_focus = []
+	if tut_queue.is_empty() or phase == "over":
+		tut_bubble.visible = false
+		return
+	var step: Dictionary = tut_queue.pop_front()
+	var raw := str(step.get("s", "촌장"))
+	tut_icon.texture = GameData.portrait_by_key(GameState.speaker_portrait_key(raw))
+	tut_icon.visible = tut_icon.texture != null
+	var who := GameState.fill_text(raw)
+	tut_label.text = ("%s: " % who if who != "" else "") + GameState.fill_text(str(step.get("t", "")))
+	tut_focus = _tutorial_focus_cells(str(step.get("focus", "")))
+	# 가리키는 칸이 위쪽이면 말풍선을 아래(패널 바로 위)에, 아니면 위(HUD 아래)에 둔다
+	var avg_y := map_bottom
+	if not tut_focus.is_empty():
+		avg_y = 0.0
+		for c in tut_focus:
+			avg_y += grid.to_pixel(c).y
+		avg_y /= float(tut_focus.size())
+	tut_bubble.anchor_top = 0.0
+	tut_bubble.anchor_bottom = 0.0
+	if avg_y < (MAP_TOP + map_bottom) * 0.5:
+		tut_bubble.offset_top = map_bottom - 150.0
+	else:
+		tut_bubble.offset_top = MAP_TOP + 4.0
+	tut_bubble.offset_bottom = tut_bubble.offset_top + 130.0
+	tut_bubble.visible = true
+	tut_bubble.modulate.a = 0.0
+	create_tween().tween_property(tut_bubble, "modulate:a", 1.0, 0.2)
+
+
+func _on_tut_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		tut_bubble.accept_event()
+		_show_next_tutorial()
+
+
+func _tutorial_focus_cells(spec: String) -> Array:
+	var cells: Array = []
+	match spec:
+		"circle":
+			for c in grid.terrain:
+				if str(grid.terrain[c]) == "circle":
+					cells.append(c)
+			return cells
+	for o in units:
+		var u: BattleUnit = o
+		if not u.is_active():
+			continue
+		var ok := false
+		match spec:
+			"allies":
+				ok = u.team == 0
+			"summoner":
+				ok = u.team == 0 and u.is_summoner
+			"enemies":
+				ok = u.team == 1
+			"weak":
+				ok = u.team == 1 and not u.is_summoner and u.spirit.hp * 2 < u.spirit.max_hp()
+			"guardian":
+				ok = u.is_guardian
+			"enemy_summoner":
+				ok = u.team == 1 and u.is_summoner
+		if ok:
+			cells.append(u.cell)
+	return cells
+
+
+## 튜토리얼이 가리키는 칸: 금빛 테두리 + 위아래로 움직이는 화살표
+func _draw_tutorial_focus() -> void:
+	if tut_focus.is_empty() or not tut_bubble.visible:
+		return
+	var bob := sin(time * 5.0) * 5.0
+	var a := 0.6 + 0.4 * sin(time * 6.0)
+	for o in tut_focus:
+		var c: Vector2i = o
+		var center := grid.to_pixel(c)
+		var pts := grid.corners(center, HEX_SIZE - 2.0)
+		pts.append(pts[0])
+		draw_polyline(pts, Color(1.0, 0.85, 0.3, a), 4.0)
+		var tip := center + Vector2(0, -HEX_SIZE - 6.0 + bob)
+		draw_colored_polygon(PackedVector2Array([tip, tip + Vector2(-12, -16), tip + Vector2(12, -16)]), Color(1.0, 0.85, 0.3))
+		draw_polyline(PackedVector2Array([tip, tip + Vector2(-12, -16), tip + Vector2(12, -16), tip]), Color(0.35, 0.22, 0.05), 2.0)
 
 
 func _mark_ui() -> void:
@@ -2112,25 +2466,30 @@ func _rebuild_ui() -> void:
 
 	if phase == "over":
 		turn_label.text = "전투 종료"
+		turn_label.add_theme_color_override("font_color", Color.WHITE)
 	elif phase == "enemy":
-		var who := "" if active == null else " — %s %s" % [_unit_tag(active), active.spirit.display_name()]
-		turn_label.text = "라운드 %d · 적 턴%s" % [round_num, who]
+		turn_label.text = "R%d  적 턴" % round_num
+		turn_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.55))
 	else:
-		turn_label.text = "라운드 %d · 아군 턴 (남은 행동 %d)" % [round_num, _ready_allies().size()]
+		turn_label.text = "R%d  아군 턴 · 남은 행동 %d" % [round_num, _ready_allies().size()]
+		turn_label.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
 
-	if inspected != null:
-		info_label.text = _unit_info(inspected)
-	elif grid.in_bounds(inspected_cell):
+	var shown: BattleUnit = inspected if inspected != null else (null if grid.in_bounds(inspected_cell) else active)
+	if shown == null and phase == "enemy":
+		shown = active
+	if inspected == null and grid.in_bounds(inspected_cell):
 		info_label.text = _terrain_info(inspected_cell)
+		unit_icon.texture = tile_tex.get(grid.terrain_at(inspected_cell), null)
 	else:
-		info_label.text = _unit_info(active)
+		info_label.text = _unit_info(shown)
+		unit_icon.texture = GameData.sprite_for(shown.spirit) if shown != null else null
+	unit_icon.visible = unit_icon.texture != null
 
 	match phase:
 		"select":
 			_add_action("턴 종료", _on_end_phase)
 			_add_action("후퇴", _on_retreat)
-			_add_action("속도 ×%d" % battle_speed, _toggle_speed)
-			hint_label.text = "행동할 아군을 고르세요. (초록 점 = 행동 가능, 순서 자유)\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위"
+			hint_label.text = "행동할 아군을 고르세요. (초록 점 = 행동 가능, 순서 자유)"
 		"player":
 			if active.is_summoner:
 				_build_summoner_actions()
@@ -2243,8 +2602,9 @@ func _build_spirit_actions() -> void:
 
 
 func _add_action(text: String, cb: Callable, disabled: bool = false) -> void:
-	var b := UIKit.button(text, cb, disabled, 72)
-	b.add_theme_font_size_override("font_size", 21)
+	var b := UIKit.button(text, cb, disabled, 64)
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 19)
 	# 쓸 수 없는 행동은 글씨를 흐리게
 	b.add_theme_color_override("font_disabled_color", Color(0.55, 0.57, 0.62, 0.5))
 	action_box.add_child(b)
@@ -2257,15 +2617,15 @@ func _unit_info(u: BattleUnit) -> String:
 	var tag := _unit_tag(u)
 	var extra := ""
 	if u.is_summoner:
-		extra = "   소환 %d/%d" % [_summoned_count(u.team), (s as Summoner).summon_limit()]
-	extra += "  사거리%d" % _max_attack_range(u)
+		extra = " 소환 %d/%d" % [_summoned_count(u.team), (s as Summoner).summon_limit()]
+	extra += " 사거리%d" % _max_attack_range(u)
 	for b in u.buffs:
 		extra += "  [%s %d]" % [b["name"], int(b["rounds"])]
-	return "[%s] %s  Lv.%d  %s 속성\nHP %d/%d  MP %d/%d  공%d 방%d 속%d 이동%d%s\n%s" % [
+	return "[%s] %s Lv.%d %s · HP %d/%d MP %d/%d\n공%d 방%d 속%d 이동%d%s · %s" % [
 		tag, s.display_name(), s.level, GameData.element_name(s.element()),
 		s.hp, s.max_hp(), s.mp, s.max_mp(),
 		s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"), extra,
-		_terrain_line(u.cell)]
+		GameData.terrain_name(grid.terrain_at(u.cell))]
 
 
 func _unit_tag(u: BattleUnit) -> String:
@@ -2295,7 +2655,7 @@ func _terrain_info(c: Vector2i) -> String:
 
 func _log(text: String) -> void:
 	log_lines.append(text)
-	while log_lines.size() > 4:
+	while log_lines.size() > 1:
 		log_lines.pop_front()
 	_mark_ui()
 

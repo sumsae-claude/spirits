@@ -251,6 +251,11 @@ func rival_element() -> String:
 	return str(NEUTRAL_OF.get(home_element(), "water"))
 
 
+## 시작 속성이 강한 속성 (첫 스테이지에서 '상성 유리'를 보여 주는 상대)
+func prey_element() -> String:
+	return str(GameData.STRONG_AGAINST.get(home_element(), "grass"))
+
+
 ## 시작 속성에 강한 속성 (회색 결사가 쓰는 속성)
 func strong_element() -> String:
 	for el in GameData.STRONG_AGAINST:
@@ -332,6 +337,10 @@ func resolve_species(token: String) -> String:
 			return str(FAMILIES[rival_element()][0])
 		"@rival_b":
 			return str(FAMILIES[rival_element()][1])
+		"@prey_a":
+			return str(FAMILIES[prey_element()][0])
+		"@prey_b":
+			return str(FAMILIES[prey_element()][1])
 		"@strong_a":
 			return str(FAMILIES[strong_element()][0])
 		"@strong_b":
@@ -352,6 +361,8 @@ func resolve_element(token: String) -> String:
 			return rival_element()
 		"@strong":
 			return strong_element()
+		"@prey":
+			return prey_element()
 	return token
 
 

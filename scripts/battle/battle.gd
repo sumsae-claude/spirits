@@ -2348,7 +2348,7 @@ func _show_help() -> void:
 ## data/chapter1.json "tutorials": {"<스테이지 id>" 또는 "*": [{"id", "on", "s", "t", "focus"}]}
 ##  - on: 이 이벤트가 일어나면 표시 (start, select, select_summoner, moved, choose, weak, captured,
 ##        counter, enemy_phase, round2, revealed, summon)
-##  - focus: 가리킬 칸 (allies, summoner, enemies, enemy_summoner, weak, circle, guardian) — 금빛 테두리 + 화살표
+##  - focus: 가리킬 칸 (allies, summoner, enemies, enemy_summoner, weak, circle, guardian, advantage, disadvantage) — 금빛 테두리 + 화살표
 ##  - 한 번 본 안내는 GameState.flags["tut_<id>"]에 기록해 다시 나오지 않는다.
 
 func _build_tutorial_bubble() -> void:
@@ -2484,6 +2484,11 @@ func _tutorial_focus_cells(spec: String) -> Array:
 				ok = u.is_guardian
 			"enemy_summoner":
 				ok = u.team == 1 and u.is_summoner
+			"advantage", "disadvantage":
+				# 고른 아군(없으면 고향 속성) 기준 상성 유리/불리한 적
+				var el := active.spirit.element() if active != null else GameState.home_element()
+				var mult := GameData.element_multiplier(el, u.spirit.element())
+				ok = u.team == 1 and (mult > 1.0 if spec == "advantage" else mult < 1.0)
 		if ok:
 			cells.append(u.cell)
 	return cells

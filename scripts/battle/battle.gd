@@ -101,6 +101,12 @@ var tut_icon: TextureRect
 var tut_label: Label
 var tut_queue: Array = []       # 보여 줄 튜토리얼 단계
 var tut_focus: Array = []       # 튜토리얼이 가리키는 칸 (Vector2i)
+var tut_tap_label: Label
+## 고정 튜토리얼 스테이지(1-1) 진행: chapter1.json stages[].script
+var script_steps: Array = []
+var script_i := -1
+var vanguard_unit: BattleUnit = null
+var stage_enemy_units: Array = []   # 스테이지 enemies 순서대로 (스크립트의 target 번호)
 var turn_label: Label
 var info_label: Label
 var hint_label: Label
@@ -128,7 +134,11 @@ func _ready() -> void:
 	_build_ui()
 	_setup_units()
 	_load_battle_art()
+	script_steps = stage.get("script", [])
 	_start_round()
+	if not script_steps.is_empty():
+		script_i = 0
+		_show_script_step()
 	_tutorial("start")
 
 
@@ -172,19 +182,29 @@ func _setup_units() -> void:
 
 	if not stage.is_empty():
 		rng.seed = hash("stage_" + str(stage["id"]))  # 스테이지마다 같은 맵
-	_generate_terrain()
+	var fixed: Dictionary = stage.get("terrain", {})
+	if fixed.is_empty():
+		_generate_terrain()
+	else:
+		for tid in fixed:
+			for p in fixed[tid]:
+				_set_terrain(Vector2i(int(p[0]), int(p[1])), str(tid))
 	rng.randomize()
 	summoner_unit = _add_unit(GameState.summoner, 0, SUMMONER_CELL)
 	summoner_unit.is_summoner = true
 	var bench := _summonable()
 	if not bench.is_empty():
-		_summon(bench[0], VANGUARD_CELL, false, 0)
+		vanguard_unit = _summon(bench[0], VANGUARD_CELL, false, 0)
 
 	if not GameState.current_rival.is_empty():
 		_setup_rival(GameState.current_rival)
 	else:
+		var cells: Array = stage.get("enemy_cells", [])
 		for i in GameState.current_encounter.size():
-			_add_unit(GameState.current_encounter[i], 1, Vector2i(ENEMY_SPAWN_COLS[i % ENEMY_SPAWN_COLS.size()], WILD_SPAWN_ROW))
+			var cell := Vector2i(ENEMY_SPAWN_COLS[i % ENEMY_SPAWN_COLS.size()], WILD_SPAWN_ROW)
+			if i < cells.size() and grid.in_bounds(cells[i]):
+				cell = cells[i]
+			stage_enemy_units.append(_add_unit(GameState.current_encounter[i], 1, cell))
 		if not GameState.current_encounter.is_empty():
 			_log("야생 정령 %d마리가 나타났다!" % GameState.current_encounter.size())
 	if not stage.is_empty() and stage.get("guardian") != null:
@@ -258,9 +278,10 @@ func _add_unit(s: Spirit, team: int, cell: Vector2i) -> BattleUnit:
 # ================================================================ 소환 / 귀환
 
 ## 지금 소환할 수 있는 계약 정령 (전장에 없고, 이번 전투에서 쓰러지지 않은)
+## 소환할 수 있는 정령: 파티 + 이번 전투에서 막 계약한 정령 (계약하면 바로 불러낼 수 있다)
 func _summonable() -> Array:
 	var result := []
-	for o in GameState.party:
+	for o in GameState.party + captured:
 		var s: Spirit = o
 		if s.hp > 0 and _field_unit_of(s) == null:
 			result.append(s)
@@ -352,6 +373,7 @@ func _start_round() -> void:
 	_start_player_phase()
 	if round_num == 2:
 		_tutorial("round2")
+	_script_event("round%d" % round_num)
 
 
 # ---------------------------------------------------------------- 아군 턴
@@ -402,6 +424,7 @@ func _select_unit(u: BattleUnit) -> void:
 	phase = "player"
 	_mark_ui()
 	_tutorial("select_summoner" if u.is_summoner else "select")
+	_script_event("select")
 
 
 func _deselect() -> void:
@@ -631,6 +654,9 @@ func _on_tap(pos: Vector2) -> void:
 	if not grid.in_bounds(c):
 		return
 	var u := _unit_at(c)
+	if _script_active():
+		_script_tap(c, u)
+		return
 	match phase:
 		"select":
 			if _is_ready(u):
@@ -808,6 +834,7 @@ func _move_player(c: Vector2i) -> void:
 	phase = "player"
 	_mark_ui()
 	_tutorial("moved")
+	_script_event("moved")
 
 
 func _move_then_menu(c: Vector2i, t: BattleUnit) -> void:
@@ -896,6 +923,7 @@ func _execute_summon(s: Spirit, cell: Vector2i) -> void:
 	pending = {}
 	place_cells = {}
 	_summon(s, cell, true, 0)
+	_script_event("summoned")
 	summoning = true
 	has_moved = true          # 소환을 시작하면 더 이상 이동/이동 취소 불가
 	move_origin = Vector2i(-1, -1)
@@ -1121,7 +1149,9 @@ func _execute_player_action(target: BattleUnit) -> void:
 	pending = {}
 	targets = {}
 	_mark_ui()
-	await _perform(active, action, target)
+	var actor := active
+	await _perform(actor, action, target)
+	_script_event("acted", {"type": str(action.get("type", "")), "target": target})
 	_finish_unit()
 
 
@@ -1389,6 +1419,8 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 	_log(msg)
 	_effect(str(dmg), target.draw_pos, color)
 	_hit_react(target)
+	if target.spirit.hp <= 0 and _script_protects(target):
+		target.spirit.hp = 1  # 튜토리얼: 디스펠할 정령이 먼저 쓰러지지 않게
 	if target.spirit.hp <= 0:
 		_knock_out(target)
 	elif target.team == 1 and not target.is_summoner and not target.is_guardian and target.spirit.hp * 2 < target.spirit.max_hp():
@@ -1424,6 +1456,8 @@ func _knock_out(target: BattleUnit) -> void:
 
 
 func _dispel_chance(u: BattleUnit, t: BattleUnit) -> float:
+	if _script_step_is("dispel") and t == _script_target():
+		return 1.0  # 튜토리얼 디스펠은 반드시 성공
 	var chance := BattleLogic.dispel_chance(u.spirit, t.spirit, t.owned)
 	if t.is_guardian:
 		chance = minf(0.95, chance + GUARDIAN_DISPEL_BONUS)
@@ -1448,6 +1482,7 @@ func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
 	if rng.randf() < chance:
 		target.captured = true
 		captured.append(target.spirit)
+		target.spirit.full_heal()  # 새로 계약한 정령은 기운을 되찾아 바로 소환할 수 있다
 		_vanish(target, "capture", Color(1.0, 0.85, 0.4))
 		if target.is_guardian:
 			_log("디스펠 성공! %s의 실이 풀려 정신을 되찾았다!" % target.spirit.display_name())
@@ -2390,10 +2425,10 @@ func _build_tutorial_bubble() -> void:
 	tut_label = UIKit.label("", 26, Color(0.2, 0.15, 0.12))
 	tut_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(tut_label)
-	var tap := UIKit.label("눌러서 닫기 ▶", 19, Color(0.5, 0.4, 0.3))
-	tap.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	tap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(tap)
+	tut_tap_label = UIKit.label("눌러서 닫기 ▶", 19, Color(0.5, 0.4, 0.3))
+	tut_tap_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	tut_tap_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(tut_tap_label)
 
 
 func _tutorial_steps() -> Array:
@@ -2407,6 +2442,8 @@ func _tutorial_steps() -> Array:
 
 ## 이벤트가 일어났을 때 아직 안 본 안내가 있으면 띄운다.
 func _tutorial(event: String) -> void:
+	if _script_active():
+		return  # 고정 튜토리얼 진행 중에는 일반 안내를 띄우지 않는다 (나중 스테이지에서 나옴)
 	for o in _tutorial_steps():
 		var step: Dictionary = o
 		if str(step.get("on", "")) != event:
@@ -2432,7 +2469,7 @@ func _show_next_tutorial() -> void:
 	tut_icon.visible = tut_icon.texture != null
 	var who := GameState.fill_text(raw)
 	tut_label.text = ("%s: " % who if who != "" else "") + GameState.fill_text(str(step.get("t", "")))
-	tut_focus = _tutorial_focus_cells(str(step.get("focus", "")))
+	tut_focus = step["_cells"] if step.has("_cells") else _tutorial_focus_cells(str(step.get("focus", "")))
 	# 가리키는 칸이 위쪽이면 말풍선을 아래(패널 바로 위)에, 아니면 위(HUD 아래)에 둔다
 	var avg_y := map_bottom
 	if not tut_focus.is_empty():
@@ -2448,6 +2485,7 @@ func _show_next_tutorial() -> void:
 		tut_bubble.offset_top = MAP_TOP + 4.0
 	tut_bubble.offset_bottom = tut_bubble.offset_top + 180.0
 	tut_bubble.visible = true
+	tut_tap_label.visible = true
 	tut_bubble.modulate.a = 0.0
 	create_tween().tween_property(tut_bubble, "modulate:a", 1.0, 0.2)
 
@@ -2455,6 +2493,13 @@ func _show_next_tutorial() -> void:
 func _on_tut_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
 		tut_bubble.accept_event()
+		if script_i >= 0 and script_i < script_steps.size():
+			if _script_step_is("free"):
+				script_i = script_steps.size()   # 고정 튜토리얼 끝
+				tut_focus = []
+				_show_next_tutorial()
+				_mark_ui()
+			return  # 진행 중인 단계는 지시대로 해야 넘어간다
 		_show_next_tutorial()
 
 
@@ -2511,6 +2556,160 @@ func _draw_tutorial_focus() -> void:
 		draw_polyline(PackedVector2Array([tip, tip + Vector2(-12, -16), tip + Vector2(12, -16), tip]), Color(0.35, 0.22, 0.05), 2.0)
 
 
+# ---------------------------------------------------------------- 고정 튜토리얼 스크립트 (1-1)
+## stages[].script: [{"do", "t", "s"?, "unit"?, "cell"?, "target"?, "until"?}]
+##  do = select(unit 누르기) / move(unit을 cell로) / attack(target에 공격 탭 공격) / dispel(target 디스펠)
+##       / wait(until 이벤트, 예: "round2") / summon(한 마리 소환) / free(설명만, 눌러서 닫으면 자유 전투)
+##  unit = "vanguard" | "summoner", target = 스테이지 enemies 번호
+##  진행 중에는 지시한 입력만 받는다. 디스펠은 반드시 성공, 대상은 HP 1 아래로 떨어지지 않는다.
+
+func _script_step() -> Dictionary:
+	if script_i < 0 or script_i >= script_steps.size():
+		return {}
+	return script_steps[script_i]
+
+
+func _script_step_is(kind: String) -> bool:
+	return str(_script_step().get("do", "")) == kind
+
+
+## 입력을 제한하는 단계인가 (free·끝이면 false)
+func _script_active() -> bool:
+	var step := _script_step()
+	return not step.is_empty() and str(step.get("do", "")) != "free"
+
+
+func _script_unit(step: Dictionary) -> BattleUnit:
+	match str(step.get("unit", "")):
+		"summoner":
+			return summoner_unit
+		"vanguard":
+			return vanguard_unit
+	return null
+
+
+func _script_target() -> BattleUnit:
+	var i := int(_script_step().get("target", -1))
+	if i >= 0 and i < stage_enemy_units.size():
+		return stage_enemy_units[i]
+	return null
+
+
+func _script_cell(step: Dictionary) -> Vector2i:
+	var c = step.get("cell", null)
+	if typeof(c) == TYPE_ARRAY:
+		return Vector2i(int(c[0]), int(c[1]))
+	return Vector2i(-1, -1)
+
+
+## 아직 남은 디스펠 단계의 대상이면 쓰러지지 않게 보호
+func _script_protects(t: BattleUnit) -> bool:
+	if script_i < 0:
+		return false
+	for i in range(script_i, script_steps.size()):
+		var step: Dictionary = script_steps[i]
+		if str(step.get("do", "")) == "dispel":
+			var idx := int(step.get("target", -1))
+			if idx >= 0 and idx < stage_enemy_units.size() and stage_enemy_units[idx] == t:
+				return true
+	return false
+
+
+func _show_script_step() -> void:
+	var step := _script_step()
+	if step.is_empty():
+		tut_bubble.visible = false
+		tut_focus = []
+		return
+	var focus: Array = []
+	match str(step.get("do", "")):
+		"select":
+			var u := _script_unit(step)
+			if u != null:
+				focus.append(u.cell)
+		"move":
+			focus.append(_script_cell(step))
+		"attack", "dispel":
+			var t := _script_target()
+			if t != null and t.is_active():
+				focus.append(t.cell)
+		"summon":
+			focus.append(summoner_unit.cell)
+	var shown := step.duplicate()
+	shown["_cells"] = focus
+	tut_queue.clear()
+	tut_queue.append(shown)
+	_show_next_tutorial()
+	tut_tap_label.visible = _script_step_is("free")
+	_mark_ui()
+
+
+func _script_advance() -> void:
+	script_i += 1
+	_show_script_step()
+
+
+## 전투 쪽 이벤트가 지금 단계의 지시와 맞으면 다음 단계로
+func _script_event(event: String, data: Dictionary = {}) -> void:
+	if not _script_active():
+		return
+	var step := _script_step()
+	var done := false
+	match str(step.get("do", "")):
+		"select":
+			done = event == "select" and active == _script_unit(step)
+		"move":
+			done = event == "moved" and active != null and active.cell == _script_cell(step)
+		"attack":
+			done = event == "acted" and str(data.get("type", "")) in ["attack", "skill", "sskill"] and data.get("target") == _script_target()
+		"dispel":
+			done = event == "acted" and str(data.get("type", "")) == "dispel"
+		"wait":
+			done = event == str(step.get("until", ""))
+		"summon":
+			done = event == "summoned"
+	if done:
+		_script_advance.call_deferred()
+
+
+## 진행 중에는 지시한 칸·대상만 누를 수 있다
+func _script_tap(c: Vector2i, u: BattleUnit) -> void:
+	var step := _script_step()
+	match str(step.get("do", "")):
+		"select":
+			if phase in ["select", "player"] and u != null and u == _script_unit(step) and not has_moved:
+				_select_unit(u)
+		"move":
+			if phase == "player" and active == _script_unit(step) and c == _script_cell(step) and reachable.has(c):
+				_move_player(c)
+		"attack", "dispel":
+			var t := _script_target()
+			if t == null or u != t:
+				return
+			if phase == "targeting" and targets.has(c):
+				_execute_player_action(t)
+			elif phase in ["player", "choose"]:
+				_open_target_menu(t)
+		"summon":
+			if phase == "placing" and place_cells.has(c):
+				_execute_summon(pending["spirit"], c)
+
+
+## 지금 단계에서 이 메뉴 버튼을 눌러도 되는가 (kind는 _add_action에 넘긴 종류)
+func _script_allows(kind: String) -> bool:
+	if not _script_active():
+		return true
+	var allowed: Array = []
+	match str(_script_step().get("do", "")):
+		"attack":
+			allowed = ["attacks", "tab_attack", "opt_attack", "back", "cancel"]
+		"dispel":
+			allowed = ["attacks", "tab_dispel", "opt_dispel", "back", "cancel"]
+		"summon":
+			allowed = ["summon", "summon_pick", "summon_done", "back", "cancel"]
+	return kind in allowed
+
+
 func _mark_ui() -> void:
 	_ui_dirty = true
 
@@ -2530,7 +2729,7 @@ func _rebuild_ui() -> void:
 	else:
 		turn_label.text = "R%d 아군 턴 · 행동 %d" % [round_num, _ready_allies().size()]
 		turn_label.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
-	end_button.visible = phase == "select" or (phase == "player" and not has_moved)
+	end_button.visible = (phase == "select" or (phase == "player" and not has_moved)) and not _script_active()
 
 	var shown: BattleUnit = inspected if inspected != null else (null if grid.in_bounds(inspected_cell) else active)
 	if shown == null and phase == "enemy":
@@ -2557,11 +2756,11 @@ func _rebuild_ui() -> void:
 			for o in _target_options(active, choose_target):
 				var opt: Dictionary = o
 				var act: Dictionary = opt["action"]
-				_add_action(str(opt["label"]), func(): _choose_option(act), not bool(opt["ok"]))
-			_add_action("취소", _cancel_choose)
+				_add_action(str(opt["label"]), func(): _choose_option(act), not bool(opt["ok"]), "opt_" + str(act.get("type", "")))
+			_add_action("취소", _cancel_choose, false, "cancel")
 			hint_label.text = "%s에게 할 행동을 고르세요. (흐린 버튼 = MP 부족 / 사거리 밖)" % choose_target.spirit.display_name()
 		"targeting":
-			_add_action("취소", _cancel_targeting)
+			_add_action("취소", _cancel_targeting, false, "cancel")
 			match str(pending.get("type", "")):
 				"dispel":
 					hint_label.text = "계약할 정령을 누르세요. (숫자 = 성공 확률, 적 정령사의 정령은 더 어려움)"
@@ -2574,7 +2773,7 @@ func _rebuild_ui() -> void:
 					hint_label.text = "공격할 대상을 누르세요. (숫자 = 예상 피해)"
 			detail_label.text = _action_desc(active, pending)
 		"placing":
-			_add_action("취소", _cancel_targeting)
+			_add_action("취소", _cancel_targeting, false, "cancel")
 			hint_label.text = "%s을(를) 소환할 칸을 누르세요." % (pending["spirit"] as Spirit).display_name()
 		"enemy":
 			hint_label.text = "적이 움직이고 있다..."
@@ -2611,12 +2810,12 @@ func _move_hint() -> String:
 
 func _add_common_actions() -> void:
 	if grid.in_bounds(preview_cell) and not has_moved:
-		_add_action("여기로 이동", _confirm_preview_move)
-	_add_action("대기", _on_wait)
+		_add_action("여기로 이동", _confirm_preview_move, false, "move_here")
+	_add_action("대기", _on_wait, false, "wait")
 	if has_moved:
-		_add_action("이동 취소", _undo_move)
+		_add_action("이동 취소", _undo_move, false, "undo")
 	else:
-		_add_action("닫기", _deselect)
+		_add_action("닫기", _deselect, false, "close")
 
 
 ## 공격 탭: 정령 = 기본 공격 + 스킬(최대 2) / 정령사 = 기본 공격 + 공격 스킬 + 디스펠
@@ -2681,9 +2880,9 @@ func _build_attack_tab() -> void:
 		var action: Dictionary = o
 		var mp_cost := _action_mp(active, action)
 		var reason := _block_reason(active, action, mp_cost)
-		_add_action(_labeled(_action_name(active, action), mp_cost, reason), func(): _choose_tab_action(action), reason != "")
+		_add_action(_labeled(_action_name(active, action), mp_cost, reason), func(): _choose_tab_action(action), reason != "", "tab_" + str(action.get("type", "")))
 		lines.append(_action_desc(active, action))
-	_add_action("뒤로", _close_submenu)
+	_add_action("뒤로", _close_submenu, false, "back")
 	hint_label.text = "공격 탭: 쓸 공격을 고르고 대상을 누르세요. (흐린 버튼 = MP 부족 / 사거리 안에 대상 없음)"
 	detail_label.text = "\n".join(lines)
 
@@ -2704,12 +2903,12 @@ func _build_summoner_actions() -> void:
 			var s: Spirit = o
 			var cost := m.summon_cost(s)
 			var reason := "한도 초과" if full else ("MP 부족" if m.mp < cost else ("빈 칸 없음" if no_room else ""))
-			_add_action(_labeled("%s Lv%d" % [s.display_name(), s.level], cost, reason), func(): _choose_summon(s), reason != "")
+			_add_action(_labeled("%s Lv%d" % [s.display_name(), s.level], cost, reason), func(): _choose_summon(s), reason != "", "summon_pick")
 		if summoning:
-			_add_action("소환 완료", _on_summon_done)
+			_add_action("소환 완료", _on_summon_done, false, "summon_done")
 			hint_label.text = "계속 소환하거나 '소환 완료'를 누르세요. (%d/%d 소환 중, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
 		else:
-			_add_action("뒤로", _close_submenu)
+			_add_action("뒤로", _close_submenu, false, "back")
 			hint_label.text = "소환할 정령을 고르세요. 한 번에 여러 마리 소환할 수 있습니다. (%d/%d)" % [_summoned_count(), m.summon_limit()]
 		detail_label.text = "소환된 정령은 다음 라운드부터 움직입니다. 같은 속성 정령은 소환 MP 할인."
 		return
@@ -2723,16 +2922,16 @@ func _build_summoner_actions() -> void:
 			var sk: Dictionary = GameData.summoner_skills[sid]
 			var action := {"type": "sskill", "skill_id": sid}
 			var reason := _block_reason(active, action, int(sk["mp"]))
-			_add_action(_labeled(str(sk["name"]), int(sk["mp"]), reason), func(): _choose_summoner_skill(sid), reason != "")
+			_add_action(_labeled(str(sk["name"]), int(sk["mp"]), reason), func(): _choose_summoner_skill(sid), reason != "", "sskill_pick")
 			lines.append(_action_desc(active, action))
-		_add_action("뒤로", _close_submenu)
+		_add_action("뒤로", _close_submenu, false, "back")
 		hint_label.text = "정령사 스킬을 고르세요. (흐린 버튼 = MP 부족 / 대상 없음)"
 		detail_label.text = "\n".join(lines)
 		return
-	_add_action("공격 ▸", _open_submenu.bind("attacks"))
-	_add_action("스킬 ▸", _open_submenu.bind("sskills"), m.support_skill_ids().is_empty())
-	_add_action("소환 ▸", _open_submenu.bind("summon"), not _can_summon_more())
-	_add_action("귀환", _on_recall, _summoned_count() == 0)
+	_add_action("공격 ▸", _open_submenu.bind("attacks"), false, "attacks")
+	_add_action("스킬 ▸", _open_submenu.bind("sskills"), m.support_skill_ids().is_empty(), "sskills")
+	_add_action("소환 ▸", _open_submenu.bind("summon"), not _can_summon_more(), "summon")
+	_add_action("귀환", _on_recall, _summoned_count() == 0, "recall")
 	_add_common_actions()
 	hint_label.text = _move_hint()
 
@@ -2741,16 +2940,16 @@ func _build_spirit_actions() -> void:
 	if submenu == "attacks":
 		_build_attack_tab()
 		return
-	_add_action("공격 ▸", _open_submenu.bind("attacks"))
-	_add_action("귀환", _on_recall)
+	_add_action("공격 ▸", _open_submenu.bind("attacks"), false, "attacks")
+	_add_action("귀환", _on_recall, false, "recall")
 	_add_common_actions()
 	hint_label.text = _move_hint()
 
 
-func _add_action(text: String, cb: Callable, disabled: bool = false) -> void:
+func _add_action(text: String, cb: Callable, disabled: bool = false, kind: String = "") -> void:
 	var b := Button.new()
 	b.text = text
-	b.disabled = disabled
+	b.disabled = disabled or not _script_allows(kind)
 	b.focus_mode = Control.FOCUS_NONE
 	b.custom_minimum_size = Vector2(CMD_WIDTH, 54)
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT

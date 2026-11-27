@@ -424,7 +424,14 @@ func start_stage(stage: Dictionary) -> void:
 	var guardian = null
 	if stage.has("guardian"):
 		guardian = Spirit.create(resolve_species(str(stage["guardian"]["species"])), int(stage["guardian"]["level"]))
-	current_stage = {"id": str(stage["id"]), "name": str(stage["name"]), "guardian": guardian}
+	current_stage = {"id": str(stage["id"]), "name": str(stage["name"]), "guardian": guardian,
+		"terrain": stage.get("terrain", {}), "enemy_cells": [], "script": []}
+	for e in stage.get("enemies", []):
+		var cell = e.get("cell", null)
+		current_stage["enemy_cells"].append(Vector2i(int(cell[0]), int(cell[1])) if typeof(cell) == TYPE_ARRAY else Vector2i(-1, -1))
+	# 고정 튜토리얼 스크립트는 처음 깰 때만
+	if not is_cleared(str(stage["id"])):
+		current_stage["script"] = stage.get("script", [])
 	heal_all()
 	get_tree().change_scene_to_file("res://scenes/battle.tscn")
 

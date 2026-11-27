@@ -24,6 +24,7 @@ var summoner_skills: Dictionary = {}
 var chapter1: Dictionary = {}
 
 var ui_font: Font
+var _sprite_cache: Dictionary = {}
 var theme: Theme
 
 
@@ -64,6 +65,20 @@ func _setup_theme() -> void:
 	ThemeDB.fallback_font = sf
 	ThemeDB.fallback_font_size = 28
 	get_tree().root.theme = theme
+
+
+## 전투용 도트 스프라이트 (assets/sprites). 없으면 null → 도형으로 대신 그린다.
+func sprite_for(s: Spirit) -> Texture2D:
+	var path := ""
+	if s is Summoner:
+		path = "res://assets/sprites/summoner_%s.png" % s.element()
+	else:
+		path = "res://assets/sprites/spirits/%s.png" % s.species_id
+	if _sprite_cache.has(path):
+		return _sprite_cache[path]
+	var tex: Texture2D = load(path) if ResourceLoader.exists(path) else null
+	_sprite_cache[path] = tex
+	return tex
 
 
 func element_multiplier(attack_element: String, defend_element: String) -> float:

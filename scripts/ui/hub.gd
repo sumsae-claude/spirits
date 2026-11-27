@@ -74,9 +74,21 @@ func _summoner_card() -> Button:
 		_equip_short(m, "weapon"), _equip_short(m, "accessory")]
 	var b := UIKit.button(text, func(): _select(m), false, 140)
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_set_icon(b, m)
 	b.add_theme_font_size_override("font_size", 22)
 	b.add_theme_color_override("font_color", GameData.element_color(m.element()).lightened(0.4))
 	return b
+
+
+## 버튼 왼쪽에 도트 스프라이트 아이콘
+func _set_icon(b: Button, s: Spirit) -> void:
+	var tex := GameData.sprite_for(s)
+	if tex == null:
+		return
+	b.icon = tex
+	b.expand_icon = true
+	b.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	b.add_theme_constant_override("icon_max_width", 72)
 
 
 func _equip_short(s: Spirit, slot: String) -> String:
@@ -90,6 +102,7 @@ func _spirit_button(s: Spirit, vanguard: bool = false) -> Button:
 		GameState.summoner.summon_cost(s), s.xp, s.xp_to_next()]
 	var b := UIKit.button(text, func(): _select(s), false, 100)
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_set_icon(b, s)
 	b.add_theme_color_override("font_color", GameData.element_color(s.element()).lightened(0.35))
 	b.add_theme_font_size_override("font_size", 24)
 	return b

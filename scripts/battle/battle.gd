@@ -99,6 +99,7 @@ var _ui_dirty := true
 
 
 func _ready() -> void:
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST  # 도트가 흐려지지 않게
 	rng.randomize()
 	font = GameData.ui_font
 	var vp_w := get_viewport_rect().size.x
@@ -1601,47 +1602,72 @@ func _draw_terrain_deco(tid: String, center: Vector2) -> void:
 func _draw_unit(u: BattleUnit) -> void:
 	var p := u.draw_pos
 	var el_color := GameData.element_color(u.spirit.element())
+	var tex := GameData.sprite_for(u.spirit)
+	# 진영 색: 아군 흰색(정령사 금색) / 야생 빨강 / 적 정령사의 정령 보라 / 적 정령사 빨강
+	var team_col := Color(0.95, 0.95, 1.0)
+	if u.team == 0 and u.is_summoner:
+		team_col = Color(1.0, 0.85, 0.4)
+	elif u.team == 1:
+		team_col = COLOR_OWNED_RING if u.owned else Color(0.95, 0.3, 0.35)
+	var resting := u.team == 0 and phase in ["select", "player", "choose", "targeting", "placing", "busy"] \
+		and (u.done or u.joined_round >= round_num)
+
 	if u == active:
 		var pulse := 0.5 + 0.5 * sin(time * 6.0)
 		draw_arc(p, 38.0, 0.0, TAU, 40, Color(1.0, 0.9, 0.3, 0.4 + 0.6 * pulse), 4.0)
 	if u == inspected:
 		draw_arc(p, 38.0, 0.0, TAU, 40, Color(0.6, 0.9, 1.0), 3.0)
-	if u.is_summoner:
-		# 정령사는 마름모 + 금색 테두리
-		var body := PackedVector2Array([p + Vector2(0, -33), p + Vector2(30, 0), p + Vector2(0, 33), p + Vector2(-30, 0)])
-		draw_colored_polygon(body, el_color.darkened(0.5))
-		var edge := body.duplicate()
-		edge.append(body[0])
-		draw_polyline(edge, Color(1.0, 0.85, 0.4) if u.team == 0 else Color(0.95, 0.3, 0.35), 3.0)
-	else:
-		var ring := Color(0.95, 0.95, 1.0) if u.team == 0 else (COLOR_OWNED_RING if u.owned else Color(0.9, 0.2, 0.25))
-		draw_circle(p, 30.0, el_color.darkened(0.2))
-		draw_arc(p, 30.0, 0.0, TAU, 40, ring, 3.0)
-		if u.joined_round >= round_num and (u.team == 0 or u.owned):
-			# 이번 라운드에 소환되어 아직 행동하지 못하는 정령
-			draw_arc(p, 34.0, 0.0, TAU, 40, Color(0.55, 0.85, 1.0, 0.5), 2.0)
-	if u.team == 0 and phase in ["select", "player", "choose", "targeting", "placing", "busy"]:
-		if u.done or u.joined_round >= round_num:
-			draw_circle(p, 31.0, Color(0, 0, 0, 0.45))  # 이번 턴 행동 끝
-		elif u != active:
-			draw_circle(p + Vector2(24, -24), 6.0, Color(0.45, 1.0, 0.55))  # 행동 가능
+
+	# 발밑 받침 (진영 색)
+	var base_col := team_col
+	base_col.a = 0.35
+	draw_colored_polygon(_ellipse(p + Vector2(0, 22), 27.0, 9.0), base_col)
+	draw_polyline(_ellipse(p + Vector2(0, 22), 27.0, 9.0, true), team_col, 2.0)
+	if u.joined_round >= round_num and (u.team == 0 or u.owned):
+		# 이번 라운드에 소환되어 아직 행동하지 못하는 정령
+		draw_arc(p, 34.0, 0.0, TAU, 40, Color(0.55, 0.85, 1.0, 0.5), 2.0)
+
 	if u.is_guardian:
 		var gp := 0.5 + 0.5 * sin(time * 3.0)
-		draw_arc(p, 36.0, 0.0, TAU, 48, Color(1.0, 0.85, 0.35, 0.6 + 0.4 * gp), 3.0)
+		draw_arc(p, 38.0, 0.0, TAU, 48, Color(1.0, 0.85, 0.35, 0.6 + 0.4 * gp), 3.0)
+
+	if tex != null:
+		var size := 70.0 if u.is_guardian else 60.0
+		var bob := 0.0 if resting else sin(time * 3.0 + float(u.get_instance_id() % 7)) * 1.5
+		var rect := Rect2(p + Vector2(-size * 0.5, -size * 0.5 - 6.0 + bob), Vector2(size, size))
+		draw_texture_rect(tex, rect, false, Color(0.45, 0.45, 0.5) if resting else Color.WHITE)
+	else:
+		draw_circle(p, 28.0, el_color.darkened(0.2))
+		draw_arc(p, 28.0, 0.0, TAU, 40, team_col, 3.0)
+		_draw_text(u.spirit.display_name(), p + Vector2(0, 2), 16, Color.WHITE)
+
+	if u.is_guardian:
 		# 엉킨 회색 실 / 드러난 금빛 실
 		var thread_col := Color(1.0, 0.9, 0.5, 0.9) if u.revealed else Color(0.6, 0.6, 0.65, 0.8)
 		for k in 3:
 			var a0 := time * 1.5 + k * TAU / 3.0
-			draw_arc(p, 24.0 + k * 3.0, a0, a0 + 2.2, 12, thread_col, 2.0)
-		_draw_text("수호", p + Vector2(0, -40), 15, Color(1.0, 0.85, 0.35))
+			draw_arc(p + Vector2(0, -4), 26.0 + k * 3.0, a0, a0 + 2.2, 12, thread_col, 2.0)
+		_draw_text("수호", p + Vector2(0, -44), 15, Color(1.0, 0.85, 0.35))
+	if u.team == 0 and not resting and u != active and phase in ["select", "player", "choose"]:
+		draw_circle(p + Vector2(25, -25), 6.0, Color(0.45, 1.0, 0.55))  # 행동 가능
 	_draw_buff_marks(u, p)
-	_draw_text(u.spirit.display_name(), p + Vector2(0, 2), 16, Color.WHITE)
-	_draw_text("Lv%d" % u.spirit.level, p + Vector2(0, 20), 14, Color(1, 1, 1, 0.85))
+	_draw_text("Lv%d" % u.spirit.level, p + Vector2(-24, -24), 13, Color(1, 1, 1, 0.9))
 	var ratio := float(u.spirit.hp) / float(maxi(1, u.spirit.max_hp()))
-	var bar := Rect2(p + Vector2(-28, 35), Vector2(56, 6))
+	var bar := Rect2(p + Vector2(-28, 33), Vector2(56, 6))
 	draw_rect(bar, Color(0, 0, 0, 0.75))
 	var hp_color := Color(0.4, 0.9, 0.45) if ratio > 0.5 else (Color(0.95, 0.8, 0.3) if ratio > 0.25 else Color(0.95, 0.35, 0.3))
 	draw_rect(Rect2(bar.position, Vector2(56.0 * ratio, 6)), hp_color)
+
+
+func _ellipse(c: Vector2, rx: float, ry: float, closed: bool = false) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	var n := 24
+	for k in n:
+		var a := TAU * k / n
+		pts.append(c + Vector2(cos(a) * rx, sin(a) * ry))
+	if closed:
+		pts.append(pts[0])
+	return pts
 
 
 ## 이동 미리보기: 선택한 유닛이 그 칸에 섰을 때의 모습
@@ -1649,10 +1675,14 @@ func _draw_preview_ghost() -> void:
 	if active == null or phase != "player" or not grid.in_bounds(preview_cell):
 		return
 	var p := grid.to_pixel(preview_cell)
-	var col := GameData.element_color(active.spirit.element())
-	col.a = 0.45
-	draw_circle(p, 28.0, col)
-	draw_arc(p, 28.0, 0.0, TAU, 40, Color(1, 1, 1, 0.7), 2.0)
+	var tex := GameData.sprite_for(active.spirit)
+	if tex != null:
+		draw_texture_rect(tex, Rect2(p + Vector2(-30, -36), Vector2(60, 60)), false, Color(1, 1, 1, 0.45))
+	else:
+		var col := GameData.element_color(active.spirit.element())
+		col.a = 0.45
+		draw_circle(p, 28.0, col)
+	draw_arc(p, 30.0, 0.0, TAU, 40, Color(1, 1, 1, 0.7), 2.0)
 	_draw_text("여기로?", p + Vector2(0, 6), 15, Color(1, 1, 1, 0.9))
 	draw_line(active.draw_pos, p, Color(1, 1, 1, 0.35), 2.0)
 

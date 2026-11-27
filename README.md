@@ -14,6 +14,7 @@
 - 고향 지역·적 구성·수호 정령이 **시작 속성에 따라 바뀜**, 라이벌 세라(중립 속성), 회색 결사 정찰병(유리 속성)
 - **수호 정령 보스**: 쓰러지지 않음 → HP 30% 이하에서 "실이 드러나" 디스펠 가능(+30%) → 성공 시 클리어·합류
 - 진행 저장(클리어 스테이지, 플래그). 거점의 '모험' 버튼 / 이어하기 → 월드맵
+- **도트 스프라이트**: 전투 화면의 정령 20종·정령사 4종을 32×32 도트로 표시 (`assets/sprites`, 생성기 `tools/art/sprites.py`, 목록 `art/sprites_sheet.png`). 거점 목록에도 아이콘
 - 기획서: [`docs/DESIGN.md`](docs/DESIGN.md) · 아트 시안: [`art/concepts/concept_sheet.png`](art/concepts/concept_sheet.png)
 
 ## 프로토타입 v0.7 기능

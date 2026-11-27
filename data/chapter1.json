@@ -39,7 +39,7 @@
 		{
 			"id": "1-2", "name": "들꽃 언덕길", "map_pos": [0.24, 0.74], "rec_level": 3,
 			"desc": "언덕 위에서 정령들이 서로 엉켜 싸우고 있다.",
-			"enemies": [{"species": "@any", "level": 3}, {"species": "@home_a", "level": 3}, {"species": "@strong_a", "level": 2}],
+			"enemies": [{"species": "@any", "level": 2}, {"species": "@home_a", "level": 3}, {"species": "@strong_a", "level": 2}],
 			"rewards": {"items": ["stone_amulet"]},
 			"dialogue_pre": "1-2_pre", "dialogue_post": "1-2_post"
 		},
@@ -95,7 +95,7 @@
 		"*": [
 			{"id": "counter", "on": "counter", "s": "촌장", "t": "공격을 받고 버틴 쪽은 상대가 바로 옆이면 반격한다. 원거리 스킬로 떨어져서 치면 반격을 피할 수 있지."},
 			{"id": "speed", "on": "enemy_phase", "s": "촌장", "t": "적 턴이 길게 느껴지면 오른쪽 위 ▶ 버튼으로 ×2, ×3 배속을 할 수 있다."},
-			{"id": "help", "on": "round2", "s": "촌장", "t": "상성이나 지형이 헷갈리면 오른쪽 위 '?' 버튼을 누르거라. 불리하면 '후퇴'로 물러날 수도 있다."}
+			{"id": "help", "on": "round2", "s": "촌장", "t": "상성이나 지형이 헷갈리면 오른쪽 위 '?' 버튼에서 설명을 볼 수 있다. 싸움이 너무 불리하면 '턴 종료' 옆 '후퇴' 버튼으로 물러나거라."}
 		]
 	},
 	"dialogues": {

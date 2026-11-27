@@ -10,6 +10,8 @@ const MP_REGEN_PER_ROUND := 2
 const COUNTER_RATIO := 0.6
 ## 다른 정령사와 계약된 정령은 디스펠하기 어렵다
 const OWNED_DISPEL_MULT := 0.6
+## 플레이어 정령사가 한 번에 받는 피해 상한 (최대 HP 비율). 한 방 패배 방지
+const SUMMONER_HIT_CAP := 0.4
 
 
 ## 피해량 = 공격 × (위력/40) × 20/(20+방어) × 속성배율 × 지형배율 × 난수(0.9~1.1)
@@ -49,12 +51,12 @@ static func heal_amount(caster: Spirit, target: Spirit, sk: Dictionary) -> int:
 
 
 ## 행동마다 경험치: 공격(기본·스킬·반격)으로 입힌 피해 비율 × 이 값 × xp_reward
-const HIT_XP_RATIO := 0.5
+const HIT_XP_RATIO := 1.0
 ## 마무리(쓰러뜨림)·디스펠 성공 보너스 = xp_reward × 이 값
-const KILL_XP_MULT := 1.0
-const DISPEL_XP_MULT := 1.0
+const KILL_XP_MULT := 1.5
+const DISPEL_XP_MULT := 1.5
 ## 회복·버프·디버프 정령사 스킬 1회
-const SUPPORT_XP := 3
+const SUPPORT_XP := 5
 
 
 static func hit_xp(target: Spirit, dealt: int) -> int:

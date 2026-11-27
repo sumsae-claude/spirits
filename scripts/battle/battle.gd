@@ -129,6 +129,7 @@ var end_button: Button
 var retreat_button: Button
 var log_label: Label
 var log_lines: Array = []
+var full_log: Array[String] = []
 var _ui_dirty := true
 
 
@@ -1489,6 +1490,9 @@ func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> 
 
 func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: String, element: String) -> void:
 	var hp_before := target.spirit.hp
+	if target == summoner_unit:
+		# 정령사 보호: 한 번에 최대 HP의 40%까지만 (한 방에 패배하지 않게)
+		dmg = mini(dmg, ceili(target.spirit.max_hp() * BattleLogic.SUMMONER_HIT_CAP))
 	target.spirit.hp = maxi(0, target.spirit.hp - dmg)
 	var mult := GameData.element_multiplier(element, target.spirit.element())
 	var msg := "%s의 %s! %s에게 %d 피해" % [
@@ -3342,6 +3346,7 @@ func _terrain_info(c: Vector2i) -> String:
 
 
 func _log(text: String) -> void:
+	full_log.append("R%d %s" % [round_num, text])  # 전체 기록 (테스트·디버그용)
 	log_lines.append(text)
 	while log_lines.size() > 1:
 		log_lines.pop_front()

@@ -10,7 +10,7 @@ extends Node2D
 ## 정령사가 쓰러지면 패배. 적을 모두 쓰러뜨리거나 계약하면, 또는 적 정령사를 쓰러뜨리면 승리.
 
 const COLS := 8
-const CMD_WIDTH := 236.0       # 명령 메뉴 너비
+const CMD_MIN_WIDTH := 132.0   # 명령 메뉴 버튼 최소 너비
 const ROWS := 12
 const HEX_SIZE := 46.0
 const MAP_TOP := 84.0          # 위쪽 HUD(라운드·배속) 높이
@@ -93,6 +93,12 @@ var time := 0.0
 var map_bottom := 0.0          # 맵 아래 끝 (그 아래는 명령 패널)
 var bg_tex: Texture2D = null    # 지역 배경 (도트)
 var tile_tex: Dictionary = {}   # 지형 id -> 헥스 타일 텍스처
+## 마법진 색: 칸 -> {"from": Color, "to": Color, "t": 경과 초}. 우리 편 파랑 / 적 정령사 쪽 빨강 / 야생 정령은 원래 보라
+var circle_state: Dictionary = {}
+const CIRCLE_BASE := Color(0.78, 0.62, 1.0)
+const CIRCLE_ALLY := Color(0.35, 0.7, 1.0)
+const CIRCLE_ENEMY := Color(1.0, 0.32, 0.3)
+const CIRCLE_SHIFT_TIME := 0.6
 var ui_root: Control
 var speed_button: Button
 var unit_icon: TextureRect
@@ -113,7 +119,13 @@ var hint_label: Label
 var cmd_panel: PanelContainer   # 유닛 옆에 뜨는 명령 메뉴 (원작처럼)
 var cmd_box: VBoxContainer
 var detail_label: Label         # 아래 패널: 행동 설명
+var unit_card: HBoxContainer
+var summon_box: VBoxContainer   # 아래 패널: 소환 목록 (속성 탭 + 카드)
+var summon_tabs: HBoxContainer
+var summon_grid: GridContainer
+var summon_filter := "all"
 var end_button: Button
+var retreat_button: Button
 var log_label: Label
 var log_lines: Array = []
 var _ui_dirty := true
@@ -161,6 +173,7 @@ func _process(delta: float) -> void:
 	for f in fx:
 		f["t"] += delta
 	fx = fx.filter(func(f): return f["t"] < f["dur"])
+	_update_circles(delta)
 	queue_redraw()
 	if _ui_dirty:
 		_ui_dirty = false
@@ -278,10 +291,15 @@ func _add_unit(s: Spirit, team: int, cell: Vector2i) -> BattleUnit:
 # ================================================================ 소환 / 귀환
 
 ## 지금 소환할 수 있는 계약 정령 (전장에 없고, 이번 전투에서 쓰러지지 않은)
-## 소환할 수 있는 정령: 파티 + 이번 전투에서 막 계약한 정령 (계약하면 바로 불러낼 수 있다)
+## 계약한 정령 전체: 파티 + 보관함 + 이번 전투에서 막 계약한 정령
+func _all_contracted() -> Array:
+	return GameState.party + GameState.storage + captured
+
+
+## 소환할 수 있는 정령 (쓰러지지 않았고 전장에 없는 계약 정령 전부, 보관함 포함)
 func _summonable() -> Array:
 	var result := []
-	for o in GameState.party + captured:
+	for o in _all_contracted():
 		var s: Spirit = o
 		if s.hp > 0 and _field_unit_of(s) == null:
 			result.append(s)
@@ -567,6 +585,10 @@ func _finish(victory: bool) -> void:
 			var s: Spirit = o
 			var amount := total_xp if participated.has(s) else int(round(total_xp * BENCH_XP_RATIO))
 			lines.append_array(s.gain_xp(amount))
+		for o in participated:
+			var ps: Spirit = o
+			if GameState.storage.has(ps):   # 보관함에서 불러낸 정령도 경험치
+				lines.append_array(ps.gain_xp(total_xp))
 		if beat_rival or rng.randf() < 0.4:
 			var eid := GameData.random_equipment(rng)
 			GameState.inventory.append(eid)
@@ -902,6 +924,16 @@ func _on_recall() -> void:
 		_finish_unit()
 
 
+## 정령은 정령사 바로 옆 칸이나 마법진 위에 있을 때만 귀환할 수 있다 (이동 후 위치 기준)
+func _can_recall(u: BattleUnit) -> bool:
+	if u == null or u.is_summoner or not u.is_active():
+		return false
+	if grid.terrain_at(u.cell) == "circle":
+		return true
+	var m := _summoner_of(u.team)
+	return m != null and m.is_active() and grid.distance(u.cell, m.cell) <= 1
+
+
 func _choose_summon(s: Spirit) -> void:
 	submenu = ""
 	var cells := _free_cells_around(active.cell)
@@ -967,9 +999,40 @@ func _on_wait() -> void:
 	_finish_unit()
 
 
+func _can_retreat() -> bool:
+	return phase == "select" or (phase == "player" and not has_moved)
+
+
+## 후퇴 확인 창 (턴 종료 옆이라 잘못 누르지 않게)
+func _confirm_retreat() -> void:
+	if not _can_retreat():
+		return
+	var overlay := ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.65)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui_root.add_child(overlay)
+	var box := PanelContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	box.grow_vertical = Control.GROW_DIRECTION_BOTH
+	box.custom_minimum_size = Vector2(560, 0)
+	box.add_theme_stylebox_override("panel", _pill_style(Color(0.08, 0.09, 0.14, 0.98), UIKit.GOLD.darkened(0.2), 16))
+	overlay.add_child(box)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 16)
+	box.add_child(vb)
+	vb.add_child(UIKit.label("후퇴할까요?", 32, UIKit.GOLD, true))
+	vb.add_child(UIKit.label("이번 전투에서 계약한 정령은 데려갑니다.\n경험치와 보상은 받지 못합니다.", 22, Color.WHITE, true))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	vb.add_child(row)
+	row.add_child(UIKit.button("후퇴", _on_retreat))
+	row.add_child(UIKit.button("계속 싸우기", overlay.queue_free))
+
+
 ## 후퇴해도 디스펠로 계약한 정령은 데려간다. (경험치·장비 보상은 없음)
 func _on_retreat() -> void:
-	if phase != "select" and not (phase == "player" and not has_moved):
+	if not _can_retreat():
 		return
 	phase = "over"
 	var lines := _keep_captured()
@@ -1035,8 +1098,6 @@ func _target_options(u: BattleUnit, t: BattleUnit) -> Array:
 			var sk: Dictionary = GameData.summoner_skills[str(o)]
 			if str(sk.get("target", "")) == "ally":
 				opts.append(_make_option(u, t, {"type": "sskill", "skill_id": str(o)}, str(sk["name"]), int(sk["mp"])))
-		if not t.is_summoner:
-			opts.append(_make_option(u, t, {"type": "recall"}, "귀환", 0))
 	return opts
 
 
@@ -1482,7 +1543,7 @@ func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
 	if rng.randf() < chance:
 		target.captured = true
 		captured.append(target.spirit)
-		target.spirit.full_heal()  # 새로 계약한 정령은 기운을 되찾아 바로 소환할 수 있다
+		# 계약한 정령은 다음 차례부터 바로 소환할 수 있다 (HP는 깎인 그대로)
 		_vanish(target, "capture", Color(1.0, 0.85, 0.4))
 		if target.is_guardian:
 			_log("디스펠 성공! %s의 실이 풀려 정신을 되찾았다!" % target.spirit.display_name())
@@ -1836,7 +1897,7 @@ func _draw_terrain_deco(tid: String, center: Vector2) -> void:
 			"lava":
 				draw_circle(center, HEX_SIZE * 0.55, Color(1.0, 0.45, 0.1, 0.10 + 0.08 * sin(time * 3.0)))
 			"circle":
-				draw_arc(center, HEX_SIZE * 0.62, 0.0, TAU, 32, Color(0.8, 0.65, 1.0, 0.35 + 0.35 * sin(time * 2.5)), 2.5)
+				_draw_circle_mark(grid.from_pixel(center), center)
 		return
 	match tid:
 		"forest":
@@ -1859,15 +1920,7 @@ func _draw_terrain_deco(tid: String, center: Vector2) -> void:
 			for off in [Vector2(-18, -12), Vector2(17, -8), Vector2(-6, 22), Vector2(14, 18)]:
 				draw_circle(center + off, 4.0, Color(1.0, 0.5, 0.15, glow))
 		"circle":
-			var glow2 := 0.55 + 0.45 * sin(time * 2.5)
-			var ring_col := Color(0.75, 0.6, 1.0, glow2)
-			draw_arc(center, HEX_SIZE * 0.62, 0.0, TAU, 32, ring_col, 2.5)
-			draw_arc(center, HEX_SIZE * 0.42, 0.0, TAU, 32, ring_col, 1.5)
-			var star := PackedVector2Array()
-			for k in 6:
-				var ang := deg_to_rad(-90.0 + 144.0 * k)
-				star.append(center + Vector2(cos(ang), sin(ang)) * HEX_SIZE * 0.58)
-			draw_polyline(star, ring_col, 1.5)
+			_draw_circle_mark(grid.from_pixel(center), center)
 		"rock":
 			draw_circle(center, HEX_SIZE * 0.45, Color(0.3, 0.28, 0.25))
 			draw_circle(center + Vector2(-6, -6), HEX_SIZE * 0.18, Color(0.4, 0.37, 0.33))
@@ -1903,6 +1956,65 @@ func _battle_region() -> String:
 				best_n = int(count[el])
 				best = el
 	return best
+
+
+## 마법진 위에 선 유닛에 따라 색을 바꾼다. 비면 마지막 색 유지. 바뀔 때 번짐·회전·빛 입자 연출.
+func _update_circles(delta: float) -> void:
+	for c in grid.terrain:
+		if str(grid.terrain[c]) != "circle":
+			continue
+		if not circle_state.has(c):
+			circle_state[c] = {"from": CIRCLE_BASE, "to": CIRCLE_BASE, "t": CIRCLE_SHIFT_TIME}
+		var st: Dictionary = circle_state[c]
+		st["t"] = float(st["t"]) + delta
+		var u := _unit_at(c)
+		if u == null:
+			continue
+		var want := CIRCLE_BASE
+		if u.team == 0:
+			want = CIRCLE_ALLY
+		elif u.is_summoner or u.owned:
+			want = CIRCLE_ENEMY
+		if want != st["to"]:
+			st["from"] = _circle_color(c)
+			st["to"] = want
+			st["t"] = 0.0
+			_add_fx("rise", grid.to_pixel(c), want, 0.9)
+
+
+func _circle_color(c: Vector2i) -> Color:
+	if not circle_state.has(c):
+		return CIRCLE_BASE
+	var st: Dictionary = circle_state[c]
+	var k := clampf(float(st["t"]) / CIRCLE_SHIFT_TIME, 0.0, 1.0)
+	return (st["from"] as Color).lerp(st["to"], k)
+
+
+func _draw_circle_mark(c: Vector2i, center: Vector2) -> void:
+	var col := _circle_color(c)
+	var st: Dictionary = circle_state.get(c, {"t": CIRCLE_SHIFT_TIME, "to": CIRCLE_BASE})
+	var k := clampf(float(st["t"]) / CIRCLE_SHIFT_TIME, 0.0, 1.0)
+	var ease_k := 1.0 - pow(1.0 - k, 3.0)
+	var owned: bool = st["to"] != CIRCLE_BASE
+	var glow := 0.55 + 0.35 * sin(time * 2.5)
+	# 가운데 빛 (차지한 진영 색)
+	if owned:
+		draw_circle(center, HEX_SIZE * 0.34, Color(col, 0.35 + 0.2 * glow))
+		draw_circle(center, HEX_SIZE * 0.16, Color(col.lightened(0.4), 0.6 + 0.3 * glow))
+	# 바뀌는 중: 가운데에서 새 색이 번져 나감
+	if k < 1.0:
+		draw_circle(center, HEX_SIZE * 0.66 * ease_k, Color(st["to"], 0.45 * (1.0 - k)))
+	# 바깥 고리 (바뀔 때 한 번 크게 맥박)
+	var ring_r := HEX_SIZE * 0.62 + 9.0 * sin(k * PI) * (1.0 if k < 1.0 else 0.0)
+	draw_arc(center, ring_r, 0.0, TAU, 36, Color(col, 0.55 + 0.4 * glow), 3.0)
+	draw_arc(center, HEX_SIZE * 0.42, 0.0, TAU, 32, Color(col, 0.5 + 0.3 * glow), 1.5)
+	# 별 문양 (바뀔 때 한 바퀴 회전)
+	var rot := ease_k * TAU if k < 1.0 else 0.0
+	var star := PackedVector2Array()
+	for i in 6:
+		var ang := deg_to_rad(-90.0 + 144.0 * i) + rot
+		star.append(center + Vector2(cos(ang), sin(ang)) * HEX_SIZE * 0.56)
+	draw_polyline(star, Color(col, 0.75 + 0.25 * glow), 2.0)
 
 
 func _load_battle_art() -> void:
@@ -2059,6 +2171,11 @@ func _draw_fx() -> void:
 				draw_rect(Rect2(p.x - w * 0.5, p.y - 70.0, w, 90.0), Color(c, 0.45 * (1.0 - k)))
 				for i in 6:
 					draw_circle(p + Vector2(-20.0 + 8.0 * i, 10.0 - 70.0 * fmod(k + i * 0.17, 1.0)), 2.5, Color(1, 1, 1, 1.0 - k))
+			"rise":
+				for i in 10:
+					var rx := (i - 5) * 6.0 + sin(i * 2.3) * 5.0
+					var ry := -10.0 - 70.0 * k * (0.5 + 0.08 * (i % 5))
+					draw_circle(p + Vector2(rx, ry), 3.0 * (1.0 - k) + 0.8, Color(c, 1.0 - k))
 			"vanish":
 				for i in 12:
 					var x := (i - 6) * 5.0 + sin(i * 1.7) * 4.0
@@ -2212,7 +2329,7 @@ func _build_ui() -> void:
 	ui_root.add_child(turn_pill)
 	turn_label = Label.new()
 	turn_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	turn_label.add_theme_font_size_override("font_size", 23)
+	turn_label.add_theme_font_size_override("font_size", 21)
 	turn_pill.add_child(turn_label)
 
 	var right := HBoxContainer.new()
@@ -2220,16 +2337,19 @@ func _build_ui() -> void:
 	right.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	right.offset_top = 14
 	right.offset_right = -14
-	right.add_theme_constant_override("separation", 10)
+	right.add_theme_constant_override("separation", 8)
 	ui_root.add_child(right)
 	end_button = _hud_button("턴 종료", _on_end_phase)
 	end_button.custom_minimum_size = Vector2(0, 56)
 	right.add_child(end_button)
-	var menu := _hud_button("≡", _show_help)
-	menu.custom_minimum_size = Vector2(56, 56)
-	right.add_child(menu)
+	retreat_button = _hud_button("후퇴", _confirm_retreat)
+	retreat_button.custom_minimum_size = Vector2(0, 56)
+	right.add_child(retreat_button)
+	var help := _hud_button("?", _show_help)
+	help.custom_minimum_size = Vector2(52, 56)
+	right.add_child(help)
 	speed_button = _hud_button("", _toggle_speed)
-	speed_button.custom_minimum_size = Vector2(132, 56)
+	speed_button.custom_minimum_size = Vector2(108, 56)
 	right.add_child(speed_button)
 	_update_speed_button()
 
@@ -2265,6 +2385,7 @@ func _build_ui() -> void:
 	var card := HBoxContainer.new()
 	card.add_theme_constant_override("separation", 12)
 	vb.add_child(card)
+	unit_card = card
 	unit_icon = TextureRect.new()
 	unit_icon.custom_minimum_size = Vector2(72, 72)
 	unit_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -2279,6 +2400,24 @@ func _build_ui() -> void:
 	detail_label = UIKit.label("", 20, Color(0.85, 0.88, 0.95))
 	detail_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vb.add_child(detail_label)
+	summon_box = VBoxContainer.new()
+	summon_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	summon_box.add_theme_constant_override("separation", 6)
+	summon_box.visible = false
+	vb.add_child(summon_box)
+	summon_tabs = HBoxContainer.new()
+	summon_tabs.add_theme_constant_override("separation", 6)
+	summon_box.add_child(summon_tabs)
+	var sscroll := ScrollContainer.new()
+	sscroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	summon_box.add_child(sscroll)
+	summon_grid = GridContainer.new()
+	summon_grid.columns = 2
+	summon_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	summon_grid.add_theme_constant_override("h_separation", 8)
+	summon_grid.add_theme_constant_override("v_separation", 8)
+	sscroll.add_child(summon_grid)
 	log_label = UIKit.label("", 19, UIKit.MUTED)
 	log_label.clip_text = true
 	log_label.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -2325,7 +2464,7 @@ func _hud_button(text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 23)
+	b.add_theme_font_size_override("font_size", 21)
 	b.add_theme_color_override("font_color", UIKit.GOLD)
 	b.add_theme_color_override("font_hover_color", Color(1, 0.95, 0.75))
 	b.add_theme_color_override("font_pressed_color", Color(0.1, 0.08, 0.05))
@@ -2350,7 +2489,7 @@ func _hud_button(text: String, cb: Callable) -> Button:
 func _update_speed_button() -> void:
 	if speed_button == null:
 		return
-	speed_button.text = "%s ×%d" % ["▶".repeat(battle_speed), battle_speed]
+	speed_button.text = "%s×%d" % ["▶".repeat(battle_speed), battle_speed]
 	var col := UIKit.GOLD if battle_speed == 1 else Color(1.0, 0.95, 0.6)
 	speed_button.add_theme_color_override("font_color", col)
 	var st := speed_button.get_theme_stylebox("normal") as StyleBoxFlat
@@ -2366,7 +2505,7 @@ func _show_help() -> void:
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui_root.add_child(overlay)
 	var vb := UIKit.screen(overlay, 120, 120, false)
-	vb.add_child(UIKit.label("메뉴 · 전투 도움말", 36, UIKit.GOLD, true))
+	vb.add_child(UIKit.label("전투 도움말", 36, UIKit.GOLD, true))
 	var rt := RichTextLabel.new()
 	rt.bbcode_enabled = true
 	rt.fit_content = true
@@ -2374,8 +2513,6 @@ func _show_help() -> void:
 	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b]\n숲: 받는 피해 -20%%\n물가: 물↑ 불↓, 물 정령 회복\n언덕: 바람↑, 원거리 사거리 +1\n용암: 불↑, 그 밖엔 화상\n마법진: 라운드마다 HP·MP 회복\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
 	vb.add_child(rt)
 	vb.add_child(UIKit.spacer())
-	var can_retreat := phase == "select" or (phase == "player" and not has_moved)
-	vb.add_child(UIKit.button("후퇴하기 (계약한 정령은 데려감)", _on_retreat, not can_retreat))
 	vb.add_child(UIKit.button("닫기", overlay.queue_free))
 
 
@@ -2719,6 +2856,10 @@ func _rebuild_ui() -> void:
 		cmd_box.remove_child(c)
 		c.queue_free()
 	detail_label.text = ""
+	summon_box.visible = false
+	detail_label.visible = true
+	unit_card.visible = true
+	log_label.visible = true
 
 	if phase == "over":
 		turn_label.text = "전투 종료"
@@ -2730,6 +2871,7 @@ func _rebuild_ui() -> void:
 		turn_label.text = "R%d 아군 턴 · 행동 %d" % [round_num, _ready_allies().size()]
 		turn_label.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
 	end_button.visible = (phase == "select" or (phase == "player" and not has_moved)) and not _script_active()
+	retreat_button.disabled = not _can_retreat()
 
 	var shown: BattleUnit = inspected if inspected != null else (null if grid.in_bounds(inspected_cell) else active)
 	if shown == null and phase == "enemy":
@@ -2887,6 +3029,124 @@ func _build_attack_tab() -> void:
 	detail_label.text = "\n".join(lines)
 
 
+## 소환 목록 (아래 패널): 계약 정령 전체를 속성 탭으로 거르고, 지금 적에게 유리한 정령부터 보여 준다.
+func _build_summon_list() -> void:
+	unit_card.visible = false
+	detail_label.visible = false
+	log_label.visible = false
+	summon_box.visible = true
+	UIKit.clear(summon_tabs)
+	UIKit.clear(summon_grid)
+	var m := GameState.summoner
+	var full := _summoned_count() >= m.summon_limit()
+	var no_room := _free_cells_around(active.cell).is_empty()
+	var entries: Array = []
+	var counts := {"all": 0}
+	for o in _all_contracted():
+		var s: Spirit = o
+		if _field_unit_of(s) != null:
+			continue  # 이미 전장에 있음
+		counts["all"] = int(counts["all"]) + 1
+		counts[s.element()] = int(counts.get(s.element(), 0)) + 1
+		if summon_filter != "all" and s.element() != summon_filter:
+			continue
+		var cost := m.summon_cost(s)
+		var reason := ""
+		if s.hp <= 0:
+			reason = "기절"
+		elif full:
+			reason = "한도 초과"
+		elif m.mp < cost:
+			reason = "MP 부족"
+		elif no_room:
+			reason = "빈 칸 없음"
+		entries.append({"s": s, "cost": cost, "reason": reason, "adv": _summon_advantage(s)})
+	entries.sort_custom(_summon_entry_before)
+	# 속성 탭
+	for key in ["all", "wind", "fire", "grass", "water"]:
+		var label := "전체" if key == "all" else GameData.element_name(key)
+		var tb := _hud_button("%s %d" % [label, int(counts.get(key, 0))], _set_summon_filter.bind(key))
+		tb.custom_minimum_size = Vector2(0, 44)
+		tb.add_theme_font_size_override("font_size", 18)
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if key != "all":
+			tb.add_theme_color_override("font_color", GameData.element_color(key).lightened(0.35))
+		if key == summon_filter:
+			var sel := tb.get_theme_stylebox("normal") as StyleBoxFlat
+			sel.bg_color = Color(0.3, 0.24, 0.1, 0.95)
+			sel.border_color = UIKit.GOLD
+		summon_tabs.add_child(tb)
+	# 카드
+	for o in entries:
+		var e: Dictionary = o
+		var s: Spirit = e["s"]
+		var reason := str(e["reason"])
+		var tag := "  ★유리" if int(e["adv"]) > 0 else ("  불리" if int(e["adv"]) < 0 else "")
+		var b := Button.new()
+		b.text = "%s Lv%d%s\nHP %d/%d · MP %d%s" % [s.display_name(), s.level, tag, s.hp, s.max_hp(), int(e["cost"]),
+			"" if reason == "" else " · " + reason]
+		b.icon = GameData.sprite_for(s)
+		b.expand_icon = false
+		b.add_theme_constant_override("icon_max_width", 48)
+		b.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(0, 66)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.clip_text = true
+		b.add_theme_font_size_override("font_size", 18)
+		b.add_theme_color_override("font_color", Color(1.0, 0.9, 0.55) if int(e["adv"]) > 0 else Color.WHITE)
+		b.add_theme_color_override("font_disabled_color", Color(0.6, 0.6, 0.66, 0.55))
+		var st := StyleBoxFlat.new()
+		st.bg_color = Color(0.13, 0.14, 0.2)
+		st.border_color = GameData.element_color(s.element()).darkened(0.1)
+		st.border_width_left = 5
+		st.set_corner_radius_all(8)
+		st.content_margin_left = 10
+		b.add_theme_stylebox_override("normal", st)
+		var hv := st.duplicate() as StyleBoxFlat
+		hv.bg_color = Color(0.2, 0.2, 0.28)
+		b.add_theme_stylebox_override("hover", hv)
+		b.add_theme_stylebox_override("pressed", hv)
+		b.add_theme_stylebox_override("disabled", st)
+		b.disabled = reason != "" or not _script_allows("summon_pick")
+		b.pressed.connect(func(): _choose_summon(s))
+		summon_grid.add_child(b)
+	if entries.is_empty():
+		summon_grid.add_child(UIKit.label("소환할 수 있는 정령이 없습니다.", 20, UIKit.MUTED))
+
+
+## 소환 목록 정렬: 지금 소환 가능 → 상성 유리 → 레벨 높은 순
+func _summon_entry_before(a: Dictionary, b: Dictionary) -> bool:
+	var ra := str(a["reason"]) == ""
+	var rb := str(b["reason"]) == ""
+	if ra != rb:
+		return ra
+	if int(a["adv"]) != int(b["adv"]):
+		return int(a["adv"]) > int(b["adv"])
+	return (a["s"] as Spirit).level > (b["s"] as Spirit).level
+
+
+func _set_summon_filter(key: String) -> void:
+	summon_filter = key
+	_mark_ui()
+
+
+## 전장의 적들에 대한 상성 점수 (유리한 적 수 - 불리한 적 수)
+func _summon_advantage(s: Spirit) -> int:
+	var score := 0
+	for o in units:
+		var u: BattleUnit = o
+		if u.team != 1 or not u.is_active():
+			continue
+		var mult := GameData.element_multiplier(s.element(), u.spirit.element())
+		if mult > 1.0:
+			score += 1
+		elif mult < 1.0:
+			score -= 1
+	return score
+
+
 func _choose_tab_action(action: Dictionary) -> void:
 	submenu = ""
 	_begin_targeting(action)
@@ -2897,20 +3157,13 @@ func _build_summoner_actions() -> void:
 	if summoning:
 		submenu = "summon"
 	if submenu == "summon":
-		var full := _summoned_count() >= m.summon_limit()
-		var no_room := _free_cells_around(active.cell).is_empty()
-		for o in _summonable():
-			var s: Spirit = o
-			var cost := m.summon_cost(s)
-			var reason := "한도 초과" if full else ("MP 부족" if m.mp < cost else ("빈 칸 없음" if no_room else ""))
-			_add_action(_labeled("%s Lv%d" % [s.display_name(), s.level], cost, reason), func(): _choose_summon(s), reason != "", "summon_pick")
+		_build_summon_list()
 		if summoning:
 			_add_action("소환 완료", _on_summon_done, false, "summon_done")
-			hint_label.text = "계속 소환하거나 '소환 완료'를 누르세요. (%d/%d 소환 중, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
+			hint_label.text = "계속 소환하거나 옆 메뉴의 '소환 완료'를 누르세요. (%d/%d, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
 		else:
 			_add_action("뒤로", _close_submenu, false, "back")
-			hint_label.text = "소환할 정령을 고르세요. 한 번에 여러 마리 소환할 수 있습니다. (%d/%d)" % [_summoned_count(), m.summon_limit()]
-		detail_label.text = "소환된 정령은 다음 라운드부터 움직입니다. 같은 속성 정령은 소환 MP 할인."
+			hint_label.text = "아래 목록에서 소환할 정령을 고르세요. 한 번에 여러 마리 가능 (%d/%d, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
 		return
 	if submenu == "attacks":
 		_build_attack_tab()
@@ -2931,7 +3184,6 @@ func _build_summoner_actions() -> void:
 	_add_action("공격 ▸", _open_submenu.bind("attacks"), false, "attacks")
 	_add_action("스킬 ▸", _open_submenu.bind("sskills"), m.support_skill_ids().is_empty(), "sskills")
 	_add_action("소환 ▸", _open_submenu.bind("summon"), not _can_summon_more(), "summon")
-	_add_action("귀환", _on_recall, _summoned_count() == 0, "recall")
 	_add_common_actions()
 	hint_label.text = _move_hint()
 
@@ -2941,7 +3193,8 @@ func _build_spirit_actions() -> void:
 		_build_attack_tab()
 		return
 	_add_action("공격 ▸", _open_submenu.bind("attacks"), false, "attacks")
-	_add_action("귀환", _on_recall, false, "recall")
+	if _can_recall(active):
+		_add_action("귀환", _on_recall, false, "recall")
 	_add_common_actions()
 	hint_label.text = _move_hint()
 
@@ -2951,7 +3204,7 @@ func _add_action(text: String, cb: Callable, disabled: bool = false, kind: Strin
 	b.text = text
 	b.disabled = disabled or not _script_allows(kind)
 	b.focus_mode = Control.FOCUS_NONE
-	b.custom_minimum_size = Vector2(CMD_WIDTH, 54)
+	b.custom_minimum_size = Vector2(CMD_MIN_WIDTH, 54)   # 글자에 맞춰 늘어남 (공격 탭은 스킬 이름만큼)
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	b.add_theme_font_size_override("font_size", 21)
 	b.add_theme_color_override("font_color", Color(1, 0.97, 0.88))

@@ -672,11 +672,22 @@ func _max_attack_range(u: BattleUnit) -> int:
 	return r
 
 
+## 전장에 서 있는 유닛과 위치의 요약값. 쓰러짐·계약·귀환한 유닛은 units에 남아 있으므로
+## units.size() 대신 이것으로 범위 표시를 다시 계산할지 판단한다.
+func _board_sig() -> int:
+	var parts := []
+	for o in units:
+		var u: BattleUnit = o
+		if u.is_active():
+			parts.append([u.get_instance_id(), u.cell])
+	return hash(parts)
+
+
 ## 누른 유닛이 다음 차례에 갈 수 있는 칸과, 거기서 공격이 닿는 칸을 계산해 둔다.
 func _update_inspect_overlay() -> void:
 	var key := ""
 	if inspected != null and inspected.is_active():
-		key = "%d:%s:%d:%d" % [inspected.get_instance_id(), str(inspected.cell), round_num, units.size()]
+		key = "%d:%s:%d:%d" % [inspected.get_instance_id(), str(inspected.cell), round_num, _board_sig()]
 	if key == _inspect_key:
 		return
 	_inspect_key = key
@@ -718,7 +729,7 @@ func _threat_from(from_cells: Dictionary, rmax: int) -> Dictionary:
 func _update_active_overlay() -> void:
 	var key := ""
 	if active != null and active.team == 0 and phase in ["player", "choose"]:
-		key = "%d:%s:%s:%s:%d" % [active.get_instance_id(), str(active.cell), str(has_moved), str(preview_cell), units.size()]
+		key = "%d:%s:%s:%s:%d" % [active.get_instance_id(), str(active.cell), str(has_moved), str(preview_cell), _board_sig()]
 	if key == _active_key:
 		return
 	_active_key = key

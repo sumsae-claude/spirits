@@ -89,6 +89,18 @@ func portrait_for(s: Spirit) -> Texture2D:
 	return sprite_for(s)
 
 
+## assets/portraits/<key>.png 를 바로 불러온다 (NPC·정령사 등). 없으면 null.
+func portrait_by_key(key: String) -> Texture2D:
+	if key == "":
+		return null
+	var path := "res://assets/portraits/%s.png" % key
+	if _sprite_cache.has(path):
+		return _sprite_cache[path]
+	var tex: Texture2D = load(path) if ResourceLoader.exists(path) else null
+	_sprite_cache[path] = tex
+	return tex
+
+
 func has_illustration(s: Spirit) -> bool:
 	return ResourceLoader.exists(_portrait_path(s))
 

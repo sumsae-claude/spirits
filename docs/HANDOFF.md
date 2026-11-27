@@ -1,7 +1,7 @@
 # 인수인계 (HANDOFF) — 정령계약자
 
 > 새 Claude 세션이 이 프로젝트를 이어받기 위한 문서입니다. **작업 시작 전에 이 문서와 `docs/DESIGN.md`를 먼저 읽으세요.**
-> 마지막 갱신: 전투 연출(공격/소환/퇴장 애니메이션)·반격·배속·거점 초상화 작업 직후.
+> 마지막 갱신: 대화창 화자 초상화·월드맵 적 초상화·NPC 초상화 추가, 전투 범위 표시 캐시 버그 수정 직후.
 
 ## 0. 한눈에 보기
 
@@ -18,8 +18,9 @@
 
 - **이 저장소의 코드는 아직 Godot에서 한 번도 실행된 적이 없습니다.** 클라우드 환경에서 Godot 바이너리 실행이 권한 정책으로 막혀 있어서 모든 코드를 "읽고 검토"만 했습니다. 사용자가 PC에서 실행해 보고 에러를 알려주기로 함 → **에러 리포트가 오면 최우선으로 수정.**
 - GDScript 작성 시 주의: `:=`로 Variant 값을 추론하지 말 것(타입 명시), `min/max` 대신 `mini/maxf` 등 사용.
+- Godot은 못 돌리지만 **문법 검사는 가능**: `pip install "gdtoolkit==4.*"` 후 `for f in scripts/*/*.gd; do gdparse $f >/dev/null || echo FAIL $f; done`. (타입 추론 오류는 못 잡으므로 `:=` 규칙은 계속 손으로 확인)
 - 데이터 파일(JSON)을 바꾼 뒤에는 Python으로 JSON 유효성과 참조(스킬 id, 보상 아이템, 대화 키)를 검사하는 습관 유지.
-- 커밋 메시지는 한국어, push는 `git push origin main`.
+- 커밋 메시지는 한국어, push는 `git push origin main`. (클라우드 세션이 작업 브랜치를 지정하면 그 브랜치에 push → 사용자가 main에 병합)
 
 ## 2. 현재까지 구현된 것 (v0.8+)
 
@@ -38,24 +39,25 @@
 
 ### 스토리 / 진행
 - `data/chapter1.json`: 1장 「끊어진 실」 6 스테이지 + 대화 전부(시작 속성에 따라 고향/적/수호 정령 변경)
-- 월드맵(`scripts/ui/world_map.gd`), 대화창(`scripts/ui/dialogue_box.gd`), 진행 저장(`GameState.cleared_stages/flags`)
+- 월드맵(`scripts/ui/world_map.gd`), 대화창(`scripts/ui/dialogue_box.gd`), 진행 저장
+- **(최신) 대화창 화자 초상화**: 주인공은 왼쪽, 다른 인물은 오른쪽(좌우 반전)에 미끄러지며 등장. 화자 → 초상화는 `GameState.speaker_portrait_key()` (`{player}`/`{rival}`/`{guardian}`은 코드에서, NPC는 `chapter1.json`의 `speaker_portraits`)
+- **(최신) 월드맵 적 초상화**: 스테이지 정보 패널에 등장 적 카드(보스·정령사 금테, 무작위 정령 "?") — `GameState.stage_preview()`(`GameState.cleared_stages/flags`)
 - 거점(`scripts/ui/hub.gd`): 정령사·계약 정령(최대 6)·보관함, 선봉 지정, 장비(정령사 포함), 사냥터/연습 대결, **(최신) 상세 화면 상단 초상화**(2D 일러스트 있으면 일러스트, 없으면 도트 확대)
 
 ### 아트
 - 혼합형 확정: **전투=도트(32×32)**, 도감/대화/초상화=2D SD 일러스트
 - 도트 생성기 `tools/art/sprites.py` → `assets/sprites/` (목록 `art/sprites_sheet.png`)
-- 2D SD 초상화 **전체 완료**: 정령 20종 + 정령사 4종 → `assets/portraits/<종족id>.png`, `summoner_<속성>.png` (목록 `art/portraits_sheet.png`)
+- 2D SD 초상화 **전체 완료**: 정령 20종 + 정령사 4종 + NPC 2종(촌장 `npc_elder`, 결사 정찰병 그레이 `npc_grey`) → `assets/portraits/<종족id>.png`, `summoner_<속성>.png` (목록 `art/portraits_sheet.png`)
   - 대표 4종 원본: `art/concepts/` (`tools/art/sd.py`), 나머지: `art/portraits_src/*.svg` (`tools/art/sd_all.py` → `tools/art/render_portraits.js`로 PNG 렌더)
 
 ## 3. 다음 할 일 (우선순위 순)
 
-1. **사용자 실행 테스트 대응** — 에러/밸런스 피드백 수정 (특히 최신 연출·반격 코드)
-2. 2D 초상화를 **대화창(화자 얼굴)·월드맵 스테이지 정보**에도 활용 (지금은 거점 상세 화면에서만 표시)
-3. 사용자에게 제안해 둔 선택 사항 (사용자 승인 후 진행)
+1. **사용자 실행 테스트 대응** — 에러/밸런스 피드백 수정 (특히 최신 연출·반격 코드, 대화창 초상화 위치)
+2. 사용자에게 제안해 둔 선택 사항 (사용자 승인 후 진행)
    - 전투 시작 전 **배치 단계** (정령사·선봉 위치 선택)
    - 보스전/필살기 한정 **전투 컷인** 연출 (설정에서 끄기)
-4. **성장 시스템** (기획서 2단계): 정령 도감·색이 다른 정령, 계승, 정령의 제단(정령석, 무료 재화 가챠), 상점, 장비 강화
-5. 챕터 2~5, 무한의 탑, 엔딩 분기, 광고/결제 연동 → 비공개 테스트 → 출시
+3. **성장 시스템** (기획서 2단계): 정령 도감·색이 다른 정령, 계승, 정령의 제단(정령석, 무료 재화 가챠), 상점, 장비 강화
+4. 챕터 2~5, 무한의 탑, 엔딩 분기, 광고/결제 연동 → 비공개 테스트 → 출시
 
 ## 4. 파일 지도
 

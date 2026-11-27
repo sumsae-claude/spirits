@@ -133,6 +133,34 @@ A["summoner_fire"] = summoner("#d4503a", "#ffc4a0", "#ffb02e")
 A["summoner_grass"] = summoner("#5aa040", "#d4f0b0", "#8be07a")
 A["summoner_water"] = summoner("#3a74d0", "#c8e2ff", "#6fb3ff")
 
+# ---------------- NPC (대화 초상화)
+def npc_elder():
+    # 촌장: 흰 수염, 둥근 모자, 지팡이
+    return svg(grad("r", "#c9b48a", "#8a6f48", "#6a5234"),
+        '<line x1="90" y1="150" x2="90" y2="470" stroke="#7a4f2a" stroke-width="18" stroke-linecap="round"/><path d="M70,150 C70,110 130,110 120,160" stroke="#7a4f2a" stroke-width="16" fill="none" stroke-linecap="round"/>'
+        '<path d="M150,300 L362,300 L410,470 L102,470Z" fill="url(#r)" stroke="#3a2a40" stroke-width="8" stroke-linejoin="round"/>'
+        '<ellipse cx="256" cy="230" rx="130" ry="120" fill="#ffe0c8" stroke="#3a2a40" stroke-width="7"/>'
+        '<path d="M150,250 C150,400 362,400 362,250 C330,300 290,290 256,300 C222,290 182,300 150,250Z" fill="#f4f4f0" stroke="#3a2a40" stroke-width="6"/>'
+        '<path d="M120,160 C130,60 382,60 392,160 Z" fill="#5a7a4a" stroke="#3a2a40" stroke-width="7" stroke-linejoin="round"/><rect x="96" y="150" width="320" height="26" rx="13" fill="#3f5a34" stroke="#3a2a40" stroke-width="6"/>'
+        '<path d="M196,200 L232,206 M316,200 L280,206" stroke="#e8e8e8" stroke-width="12" stroke-linecap="round"/>'
+        '<path d="M198,232 Q214,222 230,232 M282,232 Q298,222 314,232" stroke="#2a1f33" stroke-width="7" fill="none" stroke-linecap="round"/>'
+        + blush(256, 262, 86) + '<ellipse cx="256" cy="262" rx="18" ry="14" fill="#f0b89a"/>'
+        '<ellipse cx="408" cy="330" rx="28" ry="24" fill="#ffe0c8" stroke="#3a2a40" stroke-width="6"/><ellipse cx="96" cy="330" rx="28" ry="24" fill="#ffe0c8" stroke="#3a2a40" stroke-width="6"/>')
+def npc_grey():
+    # 회색 결사 정찰병: 회색 후드, 얼굴 아래를 가린 천, 끊어진 실 문양
+    return svg(grad("r", "#b8bcc6", "#7c818e", "#545866"),
+        '<path d="M150,300 L362,300 L420,470 L92,470Z" fill="url(#r)" stroke="#262833" stroke-width="8" stroke-linejoin="round"/>'
+        '<path d="M236,360 L276,360 M256,340 L256,380" stroke="#d9dde6" stroke-width="6" stroke-linecap="round" opacity="0.7"/>'
+        '<path d="M86,250 C80,60 432,60 426,250 C426,330 380,360 256,360 C132,360 86,330 86,250Z" fill="url(#r)" stroke="#262833" stroke-width="8"/>'
+        '<ellipse cx="256" cy="230" rx="118" ry="106" fill="#f2d6bf" stroke="#262833" stroke-width="6"/>'
+        '<path d="M140,240 C180,250 332,250 372,240 L362,320 C320,345 192,345 150,320Z" fill="#4a4e5a" stroke="#262833" stroke-width="6" stroke-linejoin="round"/>'
+        '<path d="M160,150 C200,120 312,120 352,150 C320,140 290,160 256,150 C222,160 192,140 160,150Z" fill="#3a3a44"/>'
+        '<path d="M196,182 L232,196 M316,182 L280,196" stroke="#2a1f33" stroke-width="8" stroke-linecap="round"/>'
+        + eyes(256, 214, 46, 22)
+        + '<path d="M300,280 C320,290 330,300 344,296" stroke="#c9ccd6" stroke-width="4" fill="none" stroke-dasharray="8 6"/>')
+A["npc_elder"] = npc_elder()
+A["npc_grey"] = npc_grey()
+
 for k, v in A.items():
     open(f"{OUT}/{k}.svg", "w").write(v)
 print(len(A))

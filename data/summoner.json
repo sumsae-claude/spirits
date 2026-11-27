@@ -1,0 +1,10 @@
+{
+	"base": {"hp": 30, "mp": 20, "atk": 7, "def": 6, "spd": 10, "mov": 3},
+	"growth": {"hp": 4, "mp": 3, "atk": 1, "def": 1, "spd": 0.8},
+	"attack_power": 30,
+	"summon_limit": {"base": 2, "per_levels": 5, "max": 4},
+	"summon_cost": {"base": 4, "per_level": 1, "same_element": 0.7},
+	"dispel_mp": 4,
+	"dispel_range": 2,
+	"mp_regen": 3
+}

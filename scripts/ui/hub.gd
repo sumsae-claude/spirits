@@ -1,5 +1,5 @@
 extends Control
-## 거점 화면: 파티/보관함 관리, 장비 장착, 전투 출발.
+## 거점 화면: 정령사 정보, 계약 정령/보관함 관리, 선봉 지정, 장비 장착, 전투 출발.
 
 var selected: Spirit = null
 var picking_slot := ""
@@ -34,9 +34,12 @@ func _build_list(vb: VBoxContainer) -> void:
 		vb.add_child(UIKit.label(message, 22, UIKit.GOOD))
 
 	var list := UIKit.scroll_list(vb)
-	list.add_child(UIKit.label("파티 (%d/%d)" % [GameState.party.size(), GameState.MAX_PARTY], 30))
-	for s in GameState.party:
-		list.add_child(_spirit_button(s))
+	list.add_child(UIKit.label("정령사", 30))
+	list.add_child(_summoner_card())
+	list.add_child(UIKit.label("계약 정령 (%d/%d) — 전투에서 소환 가능, ★ 선봉은 자동 소환" % [
+		GameState.party.size(), GameState.MAX_PARTY], 26))
+	for i in GameState.party.size():
+		list.add_child(_spirit_button(GameState.party[i], i == 0))
 	list.add_child(UIKit.label("보관함 (%d)" % GameState.storage.size(), 30))
 	if GameState.storage.is_empty():
 		list.add_child(UIKit.label("비어 있음 — 전투에서 야생 정령을 디스펠해 계약하세요.", 22, UIKit.MUTED))
@@ -51,9 +54,18 @@ func _build_list(vb: VBoxContainer) -> void:
 	vb.add_child(row)
 
 
-func _spirit_button(s: Spirit) -> Button:
-	var text := "%s\nHP %d · 공 %d · 방 %d · 속 %d   EXP %d/%d" % [
-		s.summary(), s.max_hp(), s.stat("atk"), s.stat("def"), s.stat("spd"), s.xp, s.xp_to_next()]
+func _summoner_card() -> Label:
+	var m := GameState.summoner
+	var text := "%s\nHP %d · MP %d · 공 %d · 방 %d · 속 %d · 이동 %d   EXP %d/%d\n동시 소환 %d마리 · 디스펠 MP %d (사거리 %d)" % [
+		m.summary(), m.max_hp(), m.max_mp(), m.stat("atk"), m.stat("def"), m.stat("spd"), m.stat("mov"),
+		m.xp, m.xp_to_next(), m.summon_limit(), m.dispel_cost(), m.dispel_range()]
+	return UIKit.label(text, 22, GameData.element_color(m.element()).lightened(0.4))
+
+
+func _spirit_button(s: Spirit, vanguard: bool = false) -> Button:
+	var text := "%s%s\nHP %d · 공 %d · 방 %d · 속 %d · 소환 MP %d   EXP %d/%d" % [
+		"★ " if vanguard else "", s.summary(), s.max_hp(), s.stat("atk"), s.stat("def"), s.stat("spd"),
+		GameState.summoner.summon_cost(s), s.xp, s.xp_to_next()]
 	var b := UIKit.button(text, func(): _select(s), false, 100)
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	b.add_theme_color_override("font_color", GameData.element_color(s.element()).lightened(0.35))
@@ -133,8 +145,13 @@ func _build_detail(vb: VBoxContainer) -> void:
 		if picking_slot == slot:
 			_build_slot_picker(list, slot, eid)
 
+	list.add_child(UIKit.label("소환 MP: %d%s" % [GameState.summoner.summon_cost(s),
+		" (같은 속성 할인)" if s.element() == GameState.summoner.element() else ""], 24, UIKit.MUTED))
+
 	# 파티 이동
 	if GameState.party.has(s):
+		var is_vanguard: bool = GameState.party[0] == s
+		list.add_child(UIKit.button("★ 선봉" if is_vanguard else "선봉으로 지정", _on_vanguard, is_vanguard))
 		list.add_child(UIKit.button("보관함으로 보내기", _on_to_storage, GameState.party.size() <= 1))
 	else:
 		list.add_child(UIKit.button("파티에 넣기", _on_to_party, GameState.party.size() >= GameState.MAX_PARTY))
@@ -182,6 +199,13 @@ func _unequip(slot: String) -> void:
 	GameState.unequip(selected, slot)
 	picking_slot = ""
 	message = "장비를 해제했습니다."
+	GameState.save_game()
+	_refresh()
+
+
+func _on_vanguard() -> void:
+	GameState.set_vanguard(selected)
+	message = "%s이(가) 선봉이 되었습니다." % selected.display_name()
 	GameState.save_game()
 	_refresh()
 

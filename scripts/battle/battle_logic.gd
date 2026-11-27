@@ -4,7 +4,7 @@ extends RefCounted
 
 const BASIC_ATTACK_POWER := 40
 const BASIC_ATTACK_RANGE := 1
-const DISPEL_RANGE := 1
+## 디스펠 사거리/MP는 data/summoner.json (정령사 전용)
 const MP_REGEN_PER_ROUND := 2
 
 

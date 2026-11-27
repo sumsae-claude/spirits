@@ -10,11 +10,9 @@ const MP_REGEN_PER_ROUND := 2
 const COUNTER_RATIO := 0.6
 ## 다른 정령사와 계약된 정령은 디스펠하기 어렵다
 const OWNED_DISPEL_MULT := 0.6
-## 전체 피해 배율. 모바일 호흡에 맞춰 일반 공격 3~4번이면 쓰러지도록 (v0.8: 1.0 → 1.3)
-const DAMAGE_SCALE := 1.3
 
 
-## 피해량 = 공격 × (위력/40) × 20/(20+방어) × 속성배율 × 지형배율 × DAMAGE_SCALE × 난수(0.9~1.1)
+## 피해량 = 공격 × (위력/40) × 20/(20+방어) × 속성배율 × 지형배율 × 난수(0.9~1.1)
 ## 지형배율 = 공격자 지형의 공격 보정(공격자 속성 기준) × 방어자 지형의 방어 보정
 ## atk_mult / def_mult = 버프·디버프 배율
 ## rng가 null이면 난수 없이 기대값을 계산 (AI, 미리보기용).
@@ -26,7 +24,7 @@ static func calc_damage(attacker: Spirit, defender: Spirit, power: int, element:
 	var mult := GameData.element_multiplier(element, defender.element())
 	mult *= GameData.terrain_attack_mult(attacker_terrain, attacker.element())
 	mult *= GameData.terrain_defense_mult(defender_terrain)
-	var dmg := atk * float(power) / 40.0 * 20.0 / (20.0 + defense) * mult * DAMAGE_SCALE
+	var dmg := atk * float(power) / 40.0 * 20.0 / (20.0 + defense) * mult
 	if rng != null:
 		dmg *= rng.randf_range(0.9, 1.1)
 	return maxi(1, int(round(dmg)))

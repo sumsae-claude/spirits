@@ -13,5 +13,13 @@
 
 	"gust": {"name": "돌풍", "element": "wind", "power": 55, "mp": 3, "range_min": 1, "range_max": 2, "desc": "세찬 바람을 일으킨다."},
 	"air_blade": {"name": "바람칼날", "element": "wind", "power": 80, "mp": 6, "range_min": 1, "range_max": 3, "desc": "보이지 않는 칼날로 벤다."},
-	"tempest": {"name": "폭풍", "element": "wind", "power": 115, "mp": 10, "range_min": 1, "range_max": 3, "desc": "모든 것을 휩쓰는 폭풍."}
+	"tempest": {"name": "폭풍", "element": "wind", "power": 115, "mp": 10, "range_min": 1, "range_max": 3, "desc": "모든 것을 휩쓰는 폭풍."},
+	"bean_firework": {"name": "콩알 폭죽", "element": "fire", "power": 95, "mp": 7, "range_min": 1, "range_max": 2, "hidden": true, "desc": "진화하지 않고 단련한 불씨콩만의 기술. 불씨를 폭죽처럼 터뜨린다."},
+	"foxfire_dance": {"name": "여우불 춤", "element": "fire", "power": 100, "mp": 8, "range_min": 1, "range_max": 3, "hidden": true, "desc": "진화하지 않은 잿불여우가 익히는 숨은 기술. 여우불이 춤추듯 적을 감싼다."},
+	"drop_fall": {"name": "방울 폭포", "element": "water", "power": 95, "mp": 7, "range_min": 1, "range_max": 2, "hidden": true, "desc": "진화하지 않고 단련한 물방울이만의 기술. 방울을 폭포처럼 쏟아붓는다."},
+	"mist_breath": {"name": "안개 숨결", "element": "water", "power": 100, "mp": 8, "range_min": 1, "range_max": 3, "hidden": true, "desc": "진화하지 않은 안개고래가 익히는 숨은 기술. 차가운 안개를 내뿜는다."},
+	"sprout_spin": {"name": "새싹 회오리", "element": "grass", "power": 95, "mp": 7, "range_min": 1, "range_max": 2, "hidden": true, "desc": "진화하지 않고 단련한 새싹이만의 기술. 새싹을 팽이처럼 돌려 부딪친다."},
+	"moss_bash": {"name": "이끼 박치기", "element": "grass", "power": 115, "mp": 8, "range_min": 1, "range_max": 1, "hidden": true, "desc": "진화하지 않은 이끼거북이 익히는 숨은 기술. 이끼 껍질로 힘껏 들이받는다."},
+	"feather_whirl": {"name": "깃털 회오리", "element": "wind", "power": 95, "mp": 7, "range_min": 1, "range_max": 2, "hidden": true, "desc": "진화하지 않고 단련한 산들새만의 기술. 깃털을 회오리에 실어 날린다."},
+	"tail_cyclone": {"name": "꼬리 회오리", "element": "wind", "power": 100, "mp": 8, "range_min": 1, "range_max": 3, "hidden": true, "desc": "진화하지 않은 회오리쥐가 익히는 숨은 기술. 꼬리로 작은 회오리를 일으킨다."}
 }

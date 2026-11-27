@@ -42,6 +42,25 @@ func gain_xp(amount: int) -> Array[String]:
 	return msgs
 
 
+## 공격 탭에 들어가는 정령사 공격 스킬 (속성 공격 스킬 중 첫 번째). 없으면 "".
+func attack_skill_id() -> String:
+	for o in skill_ids:
+		var sid := str(o)
+		if str(GameData.summoner_skills[sid].get("type", "")) == "attack":
+			return sid
+	return ""
+
+
+## '스킬' 메뉴에 들어가는 나머지 정령사 스킬 (회복·버프·디버프 등)
+func support_skill_ids() -> Array:
+	var atk := attack_skill_id()
+	var result := []
+	for o in skill_ids:
+		if str(o) != atk:
+			result.append(str(o))
+	return result
+
+
 func skill_names() -> String:
 	var names := PackedStringArray()
 	for sid in skill_ids:

@@ -4,6 +4,10 @@ extends RefCounted
 
 const STAT_KEYS := ["hp", "mp", "atk", "def", "spd", "mov"]
 const STAT_NAMES := {"hp": "체력", "mp": "마력", "atk": "공격", "def": "방어", "spd": "속도", "mov": "이동"}
+## 공격 탭 = 기본 공격 + 스킬 최대 2개
+const MAX_ATTACK_SKILLS := 2
+## 진화 레벨 + 이만큼 올렸는데 진화하지 않았으면 히든 스킬
+const HIDDEN_SKILL_GAP := 5
 
 var species_id: String = ""
 var nickname: String = ""
@@ -71,12 +75,38 @@ func xp_to_next() -> int:
 	return 8 + level * level * 4
 
 
+## 공격 탭의 스킬 (최대 2개, 기본 공격은 따로). 진화 전 정령은 거의 기본 공격만 쓴다.
+## 진화 레벨보다 HIDDEN_SKILL_GAP 이상 높은데도 진화하지 않았으면 히든 스킬이 생긴다.
 func known_skills() -> Array[String]:
 	var result: Array[String] = []
 	for entry in species()["skills"]:
-		if int(entry["level"]) <= level:
+		if int(entry["level"]) <= level and result.size() < MAX_ATTACK_SKILLS:
 			result.append(str(entry["id"]))
+	var hidden := hidden_skill()
+	if hidden != "" and has_hidden_skill() and not result.has(hidden):
+		if result.size() >= MAX_ATTACK_SKILLS:
+			result.pop_back()
+		result.append(hidden)
 	return result
+
+
+## 이 종족의 히든 스킬 id (없으면 "")
+func hidden_skill() -> String:
+	var sid := str(species().get("hidden_skill", ""))
+	return sid if GameData.skills.has(sid) else ""
+
+
+## 히든 스킬이 생기는 레벨 (없으면 0)
+func hidden_skill_level() -> int:
+	var evo := next_evolution()
+	if hidden_skill() == "" or evo.is_empty():
+		return 0
+	return int(evo["level"]) + HIDDEN_SKILL_GAP
+
+
+func has_hidden_skill() -> bool:
+	var lv := hidden_skill_level()
+	return lv > 0 and level >= lv
 
 
 ## 아직 배우지 않은 스킬: [{"id", "level"}]
@@ -97,11 +127,16 @@ func next_evolution() -> Dictionary:
 	return {"species": target, "level": int(sp.get("evolve_level", 0))}
 
 
-## 진화 조건을 만족하면 진화하고 메시지를 반환. 아니면 "".
-func try_evolve() -> String:
+func can_evolve() -> bool:
 	var evo := next_evolution()
-	if evo.is_empty() or level < int(evo["level"]):
+	return not evo.is_empty() and level >= int(evo["level"])
+
+
+## 진화 조건을 만족하면 진화하고 메시지를 반환. 아니면 "". (거점에서 플레이어가 직접 진화시킨다)
+func try_evolve() -> String:
+	if not can_evolve():
 		return ""
+	var evo := next_evolution()
 	var old_name := display_name()
 	var old_max_hp := max_hp()
 	var old_max_mp := max_mp()
@@ -125,9 +160,9 @@ func gain_xp(amount: int) -> Array[String]:
 		hp += max_hp() - old_max_hp
 		mp += max_mp() - old_max_mp
 		msgs.append("%s 레벨 %d 달성!" % [display_name(), level])
-		var evo_msg := try_evolve()
-		if evo_msg != "":
-			msgs.append(evo_msg)
+		var evo := next_evolution()
+		if not evo.is_empty() and level == int(evo["level"]):
+			msgs.append("%s이(가) 진화할 수 있다! (거점에서 진화)" % display_name())
 		for sid in known_skills():
 			if not old_skills.has(sid):
 				msgs.append("%s이(가) [%s]을(를) 배웠다!" % [display_name(), GameData.skills[sid]["name"]])

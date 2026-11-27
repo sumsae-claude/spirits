@@ -10,6 +10,7 @@ extends Node2D
 ## 정령사가 쓰러지면 패배. 적을 모두 쓰러뜨리거나 계약하면, 또는 적 정령사를 쓰러뜨리면 승리.
 
 const COLS := 8
+const CMD_WIDTH := 236.0       # 명령 메뉴 너비
 const ROWS := 12
 const HEX_SIZE := 46.0
 const MAP_TOP := 84.0          # 위쪽 HUD(라운드·배속) 높이
@@ -62,7 +63,7 @@ var inspected_cell := Vector2i(-1, -1)  # 유닛 없는 칸을 눌렀을 때 지
 var phase := "idle"
 var has_moved := false
 var move_origin := Vector2i(-1, -1)  # 이동 취소용
-var submenu := ""               # "", "skills"(정령 스킬), "sskills"(정령사 스킬), "summon"
+var submenu := ""               # "", "attacks"(공격 탭), "sskills"(정령사 스킬), "summon"
 var pending: Dictionary = {}
 var reachable: Dictionary = {}  # Vector2i -> 비용
 var targets: Dictionary = {}    # Vector2i -> BattleUnit
@@ -103,7 +104,10 @@ var tut_focus: Array = []       # 튜토리얼이 가리키는 칸 (Vector2i)
 var turn_label: Label
 var info_label: Label
 var hint_label: Label
-var action_box: GridContainer
+var cmd_panel: PanelContainer   # 유닛 옆에 뜨는 명령 메뉴 (원작처럼)
+var cmd_box: VBoxContainer
+var detail_label: Label         # 아래 패널: 행동 설명
+var end_button: Button
 var log_label: Label
 var log_lines: Array = []
 var _ui_dirty := true
@@ -985,19 +989,18 @@ func _target_options(u: BattleUnit, t: BattleUnit) -> Array:
 	if u == null or t == null:
 		return opts
 	if t.team != u.team:
-		opts.append(_make_option(u, t, {"type": "attack"}, "공격", 0))
+		# 공격 탭 먼저 (기본 공격 · 스킬 / 정령사: 기본 공격 · 공격 스킬 · 디스펠)
+		for o in _attack_tab(u):
+			var action: Dictionary = o
+			if str(action["type"]) == "dispel" and t.is_summoner:
+				continue
+			opts.append(_make_option(u, t, action, _action_name(u, action), _action_mp(u, action)))
 		if u.is_summoner:
 			var m: Summoner = u.spirit
-			if not t.is_summoner:
-				opts.append(_make_option(u, t, {"type": "dispel"}, "디스펠", m.dispel_cost()))
-			for o in m.skill_ids:
+			for o in m.support_skill_ids():
 				var sk: Dictionary = GameData.summoner_skills[str(o)]
 				if str(sk.get("target", "")) == "enemy":
 					opts.append(_make_option(u, t, {"type": "sskill", "skill_id": str(o)}, str(sk["name"]), int(sk["mp"])))
-		else:
-			for sid in u.spirit.known_skills():
-				var sk: Dictionary = GameData.skills[sid]
-				opts.append(_make_option(u, t, {"type": "skill", "skill_id": sid}, str(sk["name"]), int(sk["mp"])))
 	elif u.is_summoner:
 		var m: Summoner = u.spirit
 		for o in m.skill_ids:
@@ -1019,8 +1022,8 @@ func _make_option(u: BattleUnit, t: BattleUnit, action: Dictionary, name_text: S
 		reason = "사거리 밖"
 	var title := name_text if mp_cost == 0 else "%s (MP %d)" % [name_text, mp_cost]
 	var detail := reason if reason != "" else _preview_for(u, action, t)
-	if reason == "" and str(action.get("type", "")) == "attack" and t.team != u.team:
-		var est := _damage(u, u.cell, t, _attack_power(u), u.spirit.element(), false)
+	if reason == "" and _is_tab_attack(action) and t.team != u.team:
+		var est := _expected_damage(u, u.cell, t, action)
 		if est < t.spirit.hp and _can_counter(t, u):
 			detail += " 반격-%d" % _counter_damage(t, u, false)
 	var el := _action_element(u, action)
@@ -1031,6 +1034,31 @@ func _make_option(u: BattleUnit, t: BattleUnit, action: Dictionary, name_text: S
 		elif mult < 1.0:
 			detail += " 불리×0.75"
 	return {"label": "%s\n%s" % [title, detail], "action": action, "ok": reason == ""}
+
+
+## 반격을 부르는 공격인가 (공격 탭의 피해 행동)
+func _is_tab_attack(action: Dictionary) -> bool:
+	match str(action.get("type", "")):
+		"attack", "skill":
+			return true
+		"sskill":
+			return str(GameData.summoner_skills[action["skill_id"]].get("type", "")) == "attack"
+	return false
+
+
+## 난수 없는 예상 피해 (미리보기·AI)
+func _expected_damage(u: BattleUnit, from_cell: Vector2i, t: BattleUnit, action: Dictionary) -> int:
+	match str(action.get("type", "")):
+		"attack":
+			return _damage(u, from_cell, t, _attack_power(u), u.spirit.element(), false)
+		"skill":
+			var sk: Dictionary = GameData.skills[action["skill_id"]]
+			return _damage(u, from_cell, t, int(sk["power"]), str(sk["element"]), false)
+		"sskill":
+			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
+			if str(ssk.get("type", "")) == "attack":
+				return _damage(u, from_cell, t, int(ssk["power"]), str(ssk["element"]), false)
+	return 0
 
 
 ## 피해를 주는 행동의 속성 (피해가 없으면 "")
@@ -1058,9 +1086,9 @@ func _block_reason(u: BattleUnit, action: Dictionary, mp_cost: int) -> String:
 
 func _labeled(title: String, mp_cost: int, reason: String) -> String:
 	if reason != "":
-		return "%s\n%s" % [title, reason]
+		return "%s · %s" % [title, reason]
 	if mp_cost > 0:
-		return "%s\nMP %d" % [title, mp_cost]
+		return "%s  MP%d" % [title, mp_cost]
 	return title
 
 
@@ -1197,6 +1225,7 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 			await _anim_cast(u, target, str(sk["element"]))
 			var skill_dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), true)
 			_hit(u, target, skill_dmg, str(sk["name"]), str(sk["element"]))
+			await _try_counter(u, target)
 		"dispel":
 			s.mp = maxi(0, s.mp - GameState.summoner.dispel_cost())
 			await _anim_thread(u, target)
@@ -1210,12 +1239,16 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 			else:
 				await _anim_hop(u, GameData.element_color(u.spirit.element()))
 			_cast_summoner_skill(u, target, ssk)
+			if str(ssk["type"]) == "attack":
+				await _try_counter(u, target)
 	await get_tree().create_timer(ACTION_DELAY).timeout
 
 
 # ---------------------------------------------------------------- 반격
 
-## 일반 공격(근접)을 받고 살아남은 쪽이 사거리 안이면 반격한다. 반격에는 다시 반격하지 않는다.
+## 공격 탭의 공격(기본 공격·정령 스킬·정령사 공격 스킬)을 받고 살아남은 쪽은,
+## 공격한 상대가 기본 공격 사거리(1) 안이면 기본 공격으로 반격한다. 반격에는 다시 반격하지 않는다.
+## → 원거리 스킬로 떨어져서 치면 반격을 피할 수 있다.
 func _try_counter(attacker: BattleUnit, defender: BattleUnit) -> void:
 	if not _can_counter(defender, attacker):
 		return
@@ -1608,8 +1641,8 @@ func _plan_enemy(u: BattleUnit) -> Dictionary:
 					score += 50.0
 				if target.is_summoner:
 					score += 12.0
-				if action["type"] == "attack" and expected < target.spirit.hp:
-					# 반격 받을 피해도 고려
+				if expected < target.spirit.hp and target.is_active() and grid.distance(cell, target.cell) <= BattleLogic.BASIC_ATTACK_RANGE:
+					# 바로 옆에서 치면 반격 받을 피해도 고려 (떨어져서 스킬로 치면 반격 없음)
 					var ce := _counter_damage(target, u, false)
 					score -= ce * 0.6
 					if ce >= u.spirit.hp:
@@ -2154,9 +2187,12 @@ func _build_ui() -> void:
 	right.offset_right = -14
 	right.add_theme_constant_override("separation", 10)
 	ui_root.add_child(right)
-	var help := _hud_button("?", _show_help)
-	help.custom_minimum_size = Vector2(56, 56)
-	right.add_child(help)
+	end_button = _hud_button("턴 종료", _on_end_phase)
+	end_button.custom_minimum_size = Vector2(0, 56)
+	right.add_child(end_button)
+	var menu := _hud_button("≡", _show_help)
+	menu.custom_minimum_size = Vector2(56, 56)
+	right.add_child(menu)
 	speed_button = _hud_button("", _toggle_speed)
 	speed_button.custom_minimum_size = Vector2(132, 56)
 	right.add_child(speed_button)
@@ -2192,33 +2228,46 @@ func _build_ui() -> void:
 	margin.add_child(vb)
 
 	var card := HBoxContainer.new()
-	card.add_theme_constant_override("separation", 10)
+	card.add_theme_constant_override("separation", 12)
 	vb.add_child(card)
 	unit_icon = TextureRect.new()
-	unit_icon.custom_minimum_size = Vector2(56, 56)
+	unit_icon.custom_minimum_size = Vector2(72, 72)
 	unit_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	unit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	unit_icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	card.add_child(unit_icon)
-	info_label = UIKit.label("", 19)
+	info_label = UIKit.label("", 22)
 	card.add_child(info_label)
 
-	hint_label = UIKit.label("", 19, UIKit.GOLD)
+	hint_label = UIKit.label("", 22, UIKit.GOLD)
 	vb.add_child(hint_label)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	vb.add_child(scroll)
-	action_box = GridContainer.new()
-	action_box.columns = 4
-	action_box.add_theme_constant_override("h_separation", 8)
-	action_box.add_theme_constant_override("v_separation", 8)
-	action_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(action_box)
-	log_label = UIKit.label("", 17, UIKit.MUTED)
+	detail_label = UIKit.label("", 20, Color(0.85, 0.88, 0.95))
+	detail_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vb.add_child(detail_label)
+	log_label = UIKit.label("", 19, UIKit.MUTED)
 	log_label.clip_text = true
 	log_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	vb.add_child(log_label)
+
+	# 명령 메뉴: 유닛 옆에 뜨는 세로 목록
+	cmd_panel = PanelContainer.new()
+	var cst := StyleBoxFlat.new()
+	cst.bg_color = Color(0.06, 0.07, 0.11, 0.93)
+	cst.border_color = UIKit.GOLD.darkened(0.15)
+	cst.set_border_width_all(2)
+	cst.set_corner_radius_all(12)
+	cst.content_margin_left = 6
+	cst.content_margin_right = 6
+	cst.content_margin_top = 6
+	cst.content_margin_bottom = 6
+	cst.shadow_color = Color(0, 0, 0, 0.5)
+	cst.shadow_size = 8
+	cmd_panel.add_theme_stylebox_override("panel", cst)
+	cmd_panel.visible = false
+	ui_root.add_child(cmd_panel)
+	cmd_box = VBoxContainer.new()
+	cmd_box.add_theme_constant_override("separation", 2)
+	cmd_panel.add_child(cmd_box)
 
 	_build_tutorial_bubble()
 
@@ -2282,14 +2331,16 @@ func _show_help() -> void:
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui_root.add_child(overlay)
 	var vb := UIKit.screen(overlay, 120, 120, false)
-	vb.add_child(UIKit.label("전투 도움말", 36, UIKit.GOLD, true))
+	vb.add_child(UIKit.label("메뉴 · 전투 도움말", 36, UIKit.GOLD, true))
 	var rt := RichTextLabel.new()
 	rt.bbcode_enabled = true
 	rt.fit_content = true
 	rt.add_theme_font_size_override("normal_font_size", 22)
-	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b]\n숲: 받는 피해 -20%%\n물가: 물↑ 불↓, 물 정령 회복\n언덕: 바람↑, 원거리 사거리 +1\n용암: 불↑, 그 밖엔 화상\n마법진: 라운드마다 HP·MP 회복\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n근접 공격을 받고 버티면 반격 (스킬엔 반격 없음)" % GameData.element_chart_bbcode()
+	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b]\n숲: 받는 피해 -20%%\n물가: 물↑ 불↓, 물 정령 회복\n언덕: 바람↑, 원거리 사거리 +1\n용암: 불↑, 그 밖엔 화상\n마법진: 라운드마다 HP·MP 회복\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
 	vb.add_child(rt)
 	vb.add_child(UIKit.spacer())
+	var can_retreat := phase == "select" or (phase == "player" and not has_moved)
+	vb.add_child(UIKit.button("후퇴하기 (계약한 정령은 데려감)", _on_retreat, not can_retreat))
 	vb.add_child(UIKit.button("닫기", overlay.queue_free))
 
 
@@ -2327,7 +2378,7 @@ func _build_tutorial_bubble() -> void:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tut_bubble.add_child(row)
 	tut_icon = TextureRect.new()
-	tut_icon.custom_minimum_size = Vector2(96, 96)
+	tut_icon.custom_minimum_size = Vector2(112, 112)
 	tut_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	tut_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	tut_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2336,10 +2387,10 @@ func _build_tutorial_bubble() -> void:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(col)
-	tut_label = UIKit.label("", 21, Color(0.2, 0.15, 0.12))
+	tut_label = UIKit.label("", 26, Color(0.2, 0.15, 0.12))
 	tut_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(tut_label)
-	var tap := UIKit.label("눌러서 닫기 ▶", 16, Color(0.5, 0.4, 0.3))
+	var tap := UIKit.label("눌러서 닫기 ▶", 19, Color(0.5, 0.4, 0.3))
 	tap.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	tap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(tap)
@@ -2392,10 +2443,10 @@ func _show_next_tutorial() -> void:
 	tut_bubble.anchor_top = 0.0
 	tut_bubble.anchor_bottom = 0.0
 	if avg_y < (MAP_TOP + map_bottom) * 0.5:
-		tut_bubble.offset_top = map_bottom - 150.0
+		tut_bubble.offset_top = map_bottom - 196.0
 	else:
 		tut_bubble.offset_top = MAP_TOP + 4.0
-	tut_bubble.offset_bottom = tut_bubble.offset_top + 130.0
+	tut_bubble.offset_bottom = tut_bubble.offset_top + 180.0
 	tut_bubble.visible = true
 	tut_bubble.modulate.a = 0.0
 	create_tween().tween_property(tut_bubble, "modulate:a", 1.0, 0.2)
@@ -2460,9 +2511,10 @@ func _mark_ui() -> void:
 
 
 func _rebuild_ui() -> void:
-	for c in action_box.get_children():
-		action_box.remove_child(c)
+	for c in cmd_box.get_children():
+		cmd_box.remove_child(c)
 		c.queue_free()
+	detail_label.text = ""
 
 	if phase == "over":
 		turn_label.text = "전투 종료"
@@ -2471,8 +2523,9 @@ func _rebuild_ui() -> void:
 		turn_label.text = "R%d  적 턴" % round_num
 		turn_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.55))
 	else:
-		turn_label.text = "R%d  아군 턴 · 남은 행동 %d" % [round_num, _ready_allies().size()]
+		turn_label.text = "R%d 아군 턴 · 행동 %d" % [round_num, _ready_allies().size()]
 		turn_label.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
+	end_button.visible = phase == "select" or (phase == "player" and not has_moved)
 
 	var shown: BattleUnit = inspected if inspected != null else (null if grid.in_bounds(inspected_cell) else active)
 	if shown == null and phase == "enemy":
@@ -2485,17 +2538,17 @@ func _rebuild_ui() -> void:
 		unit_icon.texture = GameData.sprite_for(shown.spirit) if shown != null else null
 	unit_icon.visible = unit_icon.texture != null
 
+	var anchor: BattleUnit = active
 	match phase:
 		"select":
-			_add_action("턴 종료", _on_end_phase)
-			_add_action("후퇴", _on_retreat)
-			hint_label.text = "행동할 아군을 고르세요. (초록 점 = 행동 가능, 순서 자유)"
+			hint_label.text = "행동할 아군을 고르세요. 초록 점 = 행동 가능, 순서 자유.\n모두 행동하면 적 턴. 일찍 끝내려면 위쪽 '턴 종료'."
 		"player":
 			if active.is_summoner:
 				_build_summoner_actions()
 			else:
 				_build_spirit_actions()
 		"choose":
+			anchor = choose_target
 			for o in _target_options(active, choose_target):
 				var opt: Dictionary = o
 				var act: Dictionary = opt["action"]
@@ -2514,6 +2567,7 @@ func _rebuild_ui() -> void:
 					hint_label.text = "%s: 대상을 누르세요. — %s" % [ssk["name"], ssk.get("desc", "")]
 				_:
 					hint_label.text = "공격할 대상을 누르세요. (숫자 = 예상 피해)"
+			detail_label.text = _action_desc(active, pending)
 		"placing":
 			_add_action("취소", _cancel_targeting)
 			hint_label.text = "%s을(를) 소환할 칸을 누르세요." % (pending["spirit"] as Spirit).display_name()
@@ -2523,24 +2577,115 @@ func _rebuild_ui() -> void:
 			hint_label.text = ""
 
 	log_label.text = "\n".join(PackedStringArray(log_lines))
+	cmd_panel.visible = cmd_box.get_child_count() > 0 and anchor != null
+	if cmd_panel.visible:
+		_place_cmd_menu.call_deferred(anchor)
+
+
+## 명령 메뉴를 유닛 옆에 붙인다 (원작처럼). 화면 왼쪽 유닛이면 오른쪽에, 오른쪽 유닛이면 왼쪽에.
+func _place_cmd_menu(anchor: BattleUnit) -> void:
+	if anchor == null or not cmd_panel.visible:
+		return
+	cmd_panel.reset_size()
+	var sz := cmd_panel.get_combined_minimum_size()
+	var vp := get_viewport_rect().size
+	var p := anchor.draw_pos
+	var x := p.x + HEX_SIZE + 6.0 if p.x < vp.x * 0.5 else p.x - HEX_SIZE - 6.0 - sz.x
+	x = clampf(x, 8.0, vp.x - sz.x - 8.0)
+	var y := clampf(p.y - sz.y * 0.5, MAP_TOP + 4.0, maxf(MAP_TOP + 4.0, map_bottom - sz.y - 4.0))
+	cmd_panel.position = Vector2(x, y)
 
 
 func _move_hint() -> String:
 	if has_moved:
-		return "⚔ 빨간 조준 = 지금 공격 가능. 적을 눌러 행동 선택. (잘못 움직였다면 '이동 취소')"
+		return "⚔ 빨간 조준 = 지금 공격 가능. 적을 누르거나 '공격'을 고르세요."
 	if grid.in_bounds(preview_cell):
-		return "미리보기: 빨간 테두리 = 그 자리에서의 사거리, ⚔ = 공격 가능. 같은 칸을 다시 누르거나 적을 누르면 이동."
-	return "파란 칸을 눌러 미리보기. ⚔ = 지금 공격 가능, 주황 링 = 이동하면 공격 가능."
+		return "미리보기: 같은 칸을 다시 누르면 이동. 적을 누르면 그 자리로 가서 행동."
+	return "파란 칸 = 이동 가능. ⚔ = 지금 공격 가능, 주황 링 = 이동하면 공격 가능."
 
 
 func _add_common_actions() -> void:
 	if grid.in_bounds(preview_cell) and not has_moved:
 		_add_action("여기로 이동", _confirm_preview_move)
+	_add_action("대기", _on_wait)
 	if has_moved:
 		_add_action("이동 취소", _undo_move)
 	else:
-		_add_action("선택 해제", _deselect)
-	_add_action("대기", _on_wait)
+		_add_action("닫기", _deselect)
+
+
+## 공격 탭: 정령 = 기본 공격 + 스킬(최대 2) / 정령사 = 기본 공격 + 공격 스킬 + 디스펠
+func _attack_tab(u: BattleUnit) -> Array:
+	var tab: Array = [{"type": "attack"}]
+	if u.is_summoner:
+		var m: Summoner = u.spirit
+		var sid := m.attack_skill_id()
+		if sid != "":
+			tab.append({"type": "sskill", "skill_id": sid})
+		tab.append({"type": "dispel"})
+	else:
+		for sid in u.spirit.known_skills():
+			tab.append({"type": "skill", "skill_id": sid})
+	return tab
+
+
+func _action_name(u: BattleUnit, action: Dictionary) -> String:
+	match str(action.get("type", "")):
+		"attack":
+			return "기본 공격"
+		"dispel":
+			return "디스펠"
+		"skill":
+			return str(GameData.skills[action["skill_id"]]["name"])
+		"sskill":
+			return str(GameData.summoner_skills[action["skill_id"]]["name"])
+	return ""
+
+
+func _action_mp(u: BattleUnit, action: Dictionary) -> int:
+	match str(action.get("type", "")):
+		"dispel":
+			return GameState.summoner.dispel_cost()
+		"skill":
+			return int(GameData.skills[action["skill_id"]]["mp"])
+		"sskill":
+			return int(GameData.summoner_skills[action["skill_id"]]["mp"])
+	return 0
+
+
+## 아래 패널에 띄울 행동 설명 한 줄
+func _action_desc(u: BattleUnit, action: Dictionary) -> String:
+	match str(action.get("type", "")):
+		"attack":
+			return "· 기본 공격 [%s] 사거리 1 · MP 0 — 맞고 버틴 적은 반격한다" % GameData.element_name(u.spirit.element())
+		"dispel":
+			return "· 디스펠 MP %d · 사거리 %d — 약해진 정령의 실을 풀고 계약" % [GameState.summoner.dispel_cost(), GameState.summoner.dispel_range()]
+		"skill":
+			var sk: Dictionary = GameData.skills[action["skill_id"]]
+			return "· %s%s [%s] 위력 %d · 사거리 %d~%d · MP %d — %s" % [sk["name"], " ★숨은 기술" if bool(sk.get("hidden", false)) else "",
+				GameData.element_name(sk["element"]), int(sk["power"]), int(sk["range_min"]), int(sk["range_max"]), int(sk["mp"]), sk.get("desc", "")]
+		"sskill":
+			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
+			return "· %s 사거리 %d~%d · MP %d — %s" % [ssk["name"], int(ssk.get("range_min", 0)), int(ssk.get("range_max", 0)), int(ssk["mp"]), ssk.get("desc", "")]
+	return ""
+
+
+func _build_attack_tab() -> void:
+	var lines := PackedStringArray()
+	for o in _attack_tab(active):
+		var action: Dictionary = o
+		var mp_cost := _action_mp(active, action)
+		var reason := _block_reason(active, action, mp_cost)
+		_add_action(_labeled(_action_name(active, action), mp_cost, reason), func(): _choose_tab_action(action), reason != "")
+		lines.append(_action_desc(active, action))
+	_add_action("뒤로", _close_submenu)
+	hint_label.text = "공격 탭: 쓸 공격을 고르고 대상을 누르세요. (흐린 버튼 = MP 부족 / 사거리 안에 대상 없음)"
+	detail_label.text = "\n".join(lines)
+
+
+func _choose_tab_action(action: Dictionary) -> void:
+	submenu = ""
+	_begin_targeting(action)
 
 
 func _build_summoner_actions() -> void:
@@ -2554,60 +2699,77 @@ func _build_summoner_actions() -> void:
 			var s: Spirit = o
 			var cost := m.summon_cost(s)
 			var reason := "한도 초과" if full else ("MP 부족" if m.mp < cost else ("빈 칸 없음" if no_room else ""))
-			var title := "%s Lv%d" % [s.display_name(), s.level]
-			_add_action(_labeled(title, cost, reason) if reason != "" else "%s\nMP %d" % [title, cost],
-				func(): _choose_summon(s), reason != "")
+			_add_action(_labeled("%s Lv%d" % [s.display_name(), s.level], cost, reason), func(): _choose_summon(s), reason != "")
 		if summoning:
 			_add_action("소환 완료", _on_summon_done)
 			hint_label.text = "계속 소환하거나 '소환 완료'를 누르세요. (%d/%d 소환 중, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
 		else:
 			_add_action("뒤로", _close_submenu)
 			hint_label.text = "소환할 정령을 고르세요. 한 번에 여러 마리 소환할 수 있습니다. (%d/%d)" % [_summoned_count(), m.summon_limit()]
+		detail_label.text = "소환된 정령은 다음 라운드부터 움직입니다. 같은 속성 정령은 소환 MP 할인."
+		return
+	if submenu == "attacks":
+		_build_attack_tab()
 		return
 	if submenu == "sskills":
-		for o in m.skill_ids:
+		var lines := PackedStringArray()
+		for o in m.support_skill_ids():
 			var sid := str(o)
 			var sk: Dictionary = GameData.summoner_skills[sid]
-			var reason := _block_reason(active, {"type": "sskill", "skill_id": sid}, int(sk["mp"]))
+			var action := {"type": "sskill", "skill_id": sid}
+			var reason := _block_reason(active, action, int(sk["mp"]))
 			_add_action(_labeled(str(sk["name"]), int(sk["mp"]), reason), func(): _choose_summoner_skill(sid), reason != "")
+			lines.append(_action_desc(active, action))
 		_add_action("뒤로", _close_submenu)
 		hint_label.text = "정령사 스킬을 고르세요. (흐린 버튼 = MP 부족 / 대상 없음)"
+		detail_label.text = "\n".join(lines)
 		return
-	_add_action("소환", _open_submenu.bind("summon"), not _can_summon_more())
+	_add_action("공격 ▸", _open_submenu.bind("attacks"))
+	_add_action("스킬 ▸", _open_submenu.bind("sskills"), m.support_skill_ids().is_empty())
+	_add_action("소환 ▸", _open_submenu.bind("summon"), not _can_summon_more())
 	_add_action("귀환", _on_recall, _summoned_count() == 0)
-	var dispel_reason := _block_reason(active, {"type": "dispel"}, m.dispel_cost())
-	_add_action(_labeled("디스펠", m.dispel_cost(), dispel_reason), _on_dispel, dispel_reason != "")
-	_add_action("스킬", _open_submenu.bind("sskills"), m.skill_ids.is_empty())
-	var atk_reason := _block_reason(active, {"type": "attack"}, 0)
-	_add_action(_labeled("공격", 0, atk_reason), _on_attack, atk_reason != "")
 	_add_common_actions()
 	hint_label.text = _move_hint()
 
 
 func _build_spirit_actions() -> void:
-	if submenu == "skills":
-		for sid in active.spirit.known_skills():
-			var sk: Dictionary = GameData.skills[sid]
-			var reason := _block_reason(active, {"type": "skill", "skill_id": sid}, int(sk["mp"]))
-			_add_action(_labeled(str(sk["name"]), int(sk["mp"]), reason), func(): _choose_skill(sid), reason != "")
-		_add_action("뒤로", _close_submenu)
-		hint_label.text = "사용할 스킬을 고르세요. (흐린 버튼 = MP 부족 / 사거리 안에 대상 없음)"
+	if submenu == "attacks":
+		_build_attack_tab()
 		return
-	var atk_reason := _block_reason(active, {"type": "attack"}, 0)
-	_add_action(_labeled("공격", 0, atk_reason), _on_attack, atk_reason != "")
-	_add_action("스킬", _open_submenu.bind("skills"), active.spirit.known_skills().is_empty())
+	_add_action("공격 ▸", _open_submenu.bind("attacks"))
 	_add_action("귀환", _on_recall)
 	_add_common_actions()
 	hint_label.text = _move_hint()
 
 
 func _add_action(text: String, cb: Callable, disabled: bool = false) -> void:
-	var b := UIKit.button(text, cb, disabled, 64)
+	var b := Button.new()
+	b.text = text
+	b.disabled = disabled
 	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 19)
-	# 쓸 수 없는 행동은 글씨를 흐리게
-	b.add_theme_color_override("font_disabled_color", Color(0.55, 0.57, 0.62, 0.5))
-	action_box.add_child(b)
+	b.custom_minimum_size = Vector2(CMD_WIDTH, 54)
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.add_theme_font_size_override("font_size", 21)
+	b.add_theme_color_override("font_color", Color(1, 0.97, 0.88))
+	b.add_theme_color_override("font_hover_color", UIKit.GOLD)
+	b.add_theme_color_override("font_pressed_color", Color(0.1, 0.08, 0.05))
+	b.add_theme_color_override("font_disabled_color", Color(0.6, 0.6, 0.66, 0.5))
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0, 0, 0, 0)
+	normal.content_margin_left = 14
+	normal.content_margin_right = 10
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(1, 0.85, 0.45, 0.14)
+	hover.set_corner_radius_all(8)
+	var pressed := hover.duplicate() as StyleBoxFlat
+	pressed.bg_color = UIKit.GOLD
+	b.add_theme_stylebox_override("normal", normal)
+	b.add_theme_stylebox_override("hover", hover)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_stylebox_override("disabled", normal)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.pressed.connect(cb)
+	cmd_box.add_child(b)
 
 
 func _unit_info(u: BattleUnit) -> String:

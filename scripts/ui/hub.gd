@@ -178,8 +178,15 @@ func _build_detail(vb: VBoxContainer) -> void:
 		var m: Summoner = s
 		list.add_child(UIKit.label("동시 소환 %d마리 · 디스펠 MP %d (사거리 %d) · 라운드당 MP +%d" % [
 			m.summon_limit(), m.dispel_cost(), m.dispel_range(), m.mp_regen()], 22, UIKit.MUTED))
-		list.add_child(UIKit.label("정령사 스킬", 30))
-		for o in m.skill_ids:
+		list.add_child(UIKit.label("공격 탭", 30))
+		list.add_child(UIKit.label("· 기본 공격 (사거리 1)", 22))
+		var atk_sid := m.attack_skill_id()
+		if atk_sid != "":
+			var ask: Dictionary = GameData.summoner_skills[atk_sid]
+			list.add_child(UIKit.label("· %s (MP %d) — %s" % [ask["name"], int(ask["mp"]), ask.get("desc", "")], 22))
+		list.add_child(UIKit.label("· 디스펠 (MP %d) — 약해진 정령과 계약" % m.dispel_cost(), 22))
+		list.add_child(UIKit.label("스킬", 30))
+		for o in m.support_skill_ids():
 			var sk: Dictionary = GameData.summoner_skills[str(o)]
 			list.add_child(UIKit.label("· %s (MP %d) — %s" % [sk["name"], int(sk["mp"]), sk.get("desc", "")], 22))
 	else:
@@ -188,13 +195,18 @@ func _build_detail(vb: VBoxContainer) -> void:
 		if evo.is_empty():
 			list.add_child(UIKit.label("진화: 최종 단계", 24, UIKit.MUTED))
 		else:
-			list.add_child(UIKit.label("진화: Lv.%d에 %s(으)로 진화" % [
-				int(evo["level"]), GameData.species[evo["species"]]["name"]], 24, UIKit.GOLD))
+			var evo_name := str(GameData.species[evo["species"]]["name"])
+			list.add_child(UIKit.label("진화: Lv.%d부터 %s(으)로 진화 가능" % [int(evo["level"]), evo_name], 24, UIKit.GOLD))
+			if s.can_evolve():
+				list.add_child(UIKit.button("✦ %s(으)로 진화시키기" % evo_name, _on_evolve))
+			if s.hidden_skill_level() > 0 and not s.has_hidden_skill():
+				list.add_child(UIKit.label("진화하지 않고 Lv.%d까지 키우면 숨은 기술을 익힌다는데…" % s.hidden_skill_level(), 21, UIKit.MUTED))
 
-		# 스킬
-		list.add_child(UIKit.label("스킬", 30))
+		# 공격 탭: 기본 공격 + 스킬 최대 2
+		list.add_child(UIKit.label("공격 탭", 30))
+		list.add_child(UIKit.label("· 기본 공격 [%s] 사거리 1 · MP 0" % GameData.element_name(s.element()), 22))
 		for sid in s.known_skills():
-			list.add_child(UIKit.label(_skill_text(sid), 22))
+			list.add_child(UIKit.label(_skill_text(sid), 22, UIKit.GOLD if bool(GameData.skills[sid].get("hidden", false)) else Color.WHITE))
 		for entry in s.upcoming_skills():
 			list.add_child(UIKit.label("(Lv.%d 습득) %s" % [entry["level"], _skill_text(entry["id"])], 22, UIKit.MUTED))
 
@@ -228,10 +240,18 @@ func _build_detail(vb: VBoxContainer) -> void:
 	vb.add_child(UIKit.button("뒤로", _on_back))
 
 
+func _on_evolve() -> void:
+	var msg := selected.try_evolve()
+	if msg != "":
+		message = msg
+		GameState.save_game()
+	_refresh()
+
+
 func _skill_text(sid: String) -> String:
 	var sk: Dictionary = GameData.skills[sid]
-	return "· %s [%s] 위력 %d · MP %d · 사거리 %d~%d" % [
-		sk["name"], GameData.element_name(sk["element"]), int(sk["power"]), int(sk["mp"]),
+	return "· %s%s [%s] 위력 %d · MP %d · 사거리 %d~%d" % [
+		sk["name"], " (숨은 기술)" if bool(sk.get("hidden", false)) else "", GameData.element_name(sk["element"]), int(sk["power"]), int(sk["mp"]),
 		int(sk["range_min"]), int(sk["range_max"])]
 
 

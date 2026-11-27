@@ -8,6 +8,8 @@ var message := ""
 
 func _ready() -> void:
 	theme = GameData.theme
+	message = GameState.hub_message
+	GameState.hub_message = ""
 	_rebuild()
 
 
@@ -60,9 +62,9 @@ func _build_list(vb: VBoxContainer) -> void:
 
 func _summoner_card() -> Label:
 	var m := GameState.summoner
-	var text := "%s\nHP %d · MP %d · 공 %d · 방 %d · 속 %d · 이동 %d   EXP %d/%d\n동시 소환 %d마리 · 디스펠 MP %d (사거리 %d)" % [
+	var text := "%s\nHP %d · MP %d · 공 %d · 방 %d · 속 %d · 이동 %d   EXP %d/%d\n동시 소환 %d마리 · 디스펠 MP %d (사거리 %d)\n스킬: %s" % [
 		m.summary(), m.max_hp(), m.max_mp(), m.stat("atk"), m.stat("def"), m.stat("spd"), m.stat("mov"),
-		m.xp, m.xp_to_next(), m.summon_limit(), m.dispel_cost(), m.dispel_range()]
+		m.xp, m.xp_to_next(), m.summon_limit(), m.dispel_cost(), m.dispel_range(), m.skill_names()]
 	return UIKit.label(text, 22, GameData.element_color(m.element()).lightened(0.4))
 
 

@@ -17,7 +17,8 @@ var storage: Array = []    # Spirit
 var inventory: Array = []  # 장착하지 않은 장비 id
 var battles_won: int = 0
 var current_encounter: Array = []  # 다음 전투에 나올 야생 정령 (Spirit)
-var current_rival: Dictionary = {}  # 다음 전투의 적 정령사 {"summoner": Summoner, "party": [Spirit]}
+var current_rival: Dictionary = {}
+var hub_message := ""  # 거점 화면에 한 번 보여줄 알림 (후퇴 결과 등)  # 다음 전투의 적 정령사 {"summoner": Summoner, "party": [Spirit]}
 
 
 func new_game(p_name: String, element: String) -> void:

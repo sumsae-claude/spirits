@@ -5,6 +5,8 @@ extends Spirit
 ## 설정값은 data/summoner.json
 
 var element_id: String = "fire"
+## 보유한 정령사 스킬 id (data/summoner_skills.json). 지금은 레벨로 습득, 나중에 가챠 등으로 획득 예정.
+var skill_ids: Array = []
 var _species_cache: Dictionary = {}
 
 
@@ -14,8 +16,37 @@ static func create_summoner(p_name: String, p_element: String, p_level: int) -> 
 	s.nickname = p_name
 	s.element_id = p_element
 	s.level = maxi(1, p_level)
+	s.learn_new_skills()
 	s.full_heal()
 	return s
+
+
+## 레벨/속성 조건을 만족하는데 아직 없는 스킬을 배운다. 새로 배운 스킬 이름을 반환.
+func learn_new_skills() -> Array[String]:
+	var learned: Array[String] = []
+	for sid in GameData.summoner_skills:
+		var sk: Dictionary = GameData.summoner_skills[sid]
+		var req := str(sk.get("element_req", ""))
+		if req != "" and req != element_id:
+			continue
+		if int(sk.get("learn_level", 1)) <= level and not skill_ids.has(sid):
+			skill_ids.append(sid)
+			learned.append(str(sk["name"]))
+	return learned
+
+
+func gain_xp(amount: int) -> Array[String]:
+	var msgs: Array[String] = super(amount)
+	for skill_name in learn_new_skills():
+		msgs.append("%s이(가) [%s]을(를) 익혔다!" % [display_name(), skill_name])
+	return msgs
+
+
+func skill_names() -> String:
+	var names := PackedStringArray()
+	for sid in skill_ids:
+		names.append(str(GameData.summoner_skills[sid]["name"]))
+	return ", ".join(names)
 
 
 ## Spirit의 종족 데이터 자리에 정령사 능력치를 넣어준다.
@@ -80,6 +111,7 @@ func summary() -> String:
 func to_dict() -> Dictionary:
 	var d: Dictionary = super()
 	d["element"] = element_id
+	d["skills"] = skill_ids.duplicate()
 	return d
 
 
@@ -89,6 +121,11 @@ static func from_summoner_dict(d: Dictionary) -> Summoner:
 		el = "fire"
 	var s := Summoner.create_summoner(str(d.get("nickname", "리안")), el, int(d.get("level", 1)))
 	s.xp = maxi(0, int(d.get("xp", 0)))
+	var saved = d.get("skills", [])
+	if typeof(saved) == TYPE_ARRAY:
+		for sid in saved:
+			if GameData.summoner_skills.has(str(sid)) and not s.skill_ids.has(str(sid)):
+				s.skill_ids.append(str(sid))
 	s.hp = int(d.get("hp", s.max_hp()))
 	s.mp = int(d.get("mp", s.max_mp()))
 	s.clamp_vitals()

@@ -2,9 +2,10 @@ extends Node2D
 ## 헥스 턴제 전투 씬. 맵/유닛은 _draw()로 그리고, UI는 코드로 생성한다.
 ##
 ## 아군은 정령사 한 명으로 시작하고, 선봉 정령 1마리가 자동 소환된다.
-##  - 정령사: (이동) → 소환 / 귀환 / 디스펠 / 공격 / 대기 / 후퇴
+## 라운드 = 아군 턴 → 적 턴. 아군 턴에는 행동할 유닛을 원하는 순서로 골라 움직인다.
+##  - 정령사: (이동) → 소환 / 귀환 / 디스펠 / 스킬 / 공격 / 대기
 ##  - 정령:   (이동) → 공격 / 스킬 / 귀환 / 대기   ※ 소환된 다음 라운드부터 행동
-## 라운드마다 속도 순으로 행동한다.
+##  - 이동 후 행동 전이면 이동 취소 가능. 모두 행동하거나 '턴 종료'하면 적 턴.
 ## 상대는 야생 정령 무리, 또는 정령을 소환하는 적 정령사.
 ## 정령사가 쓰러지면 패배. 적을 모두 쓰러뜨리거나 계약하면, 또는 적 정령사를 쓰러뜨리면 승리.
 
@@ -37,11 +38,11 @@ const COLOR_PLACE := Color(0.55, 0.85, 1.0)
 const COLOR_ACTIVE_CELL := Color(0.9, 0.8, 0.3)
 const COLOR_OUTLINE := Color(0.35, 0.4, 0.5, 0.6)
 const COLOR_OWNED_RING := Color(0.75, 0.4, 0.95)
+const COLOR_INSPECT_MOVE := Color(0.95, 0.65, 0.2)
+const COLOR_INSPECT_THREAT := Color(0.9, 0.25, 0.3)
 
 var grid: HexGrid
 var units: Array = []        # 전장에 있는 BattleUnit (귀환하면 빠진다)
-var turn_queue: Array = []   # 이번 라운드 행동 순서
-var turn_index := -1
 var round_num := 0
 var summoner_unit: BattleUnit = null
 var enemy_summoner_unit: BattleUnit = null  # 정령사 대결일 때만
@@ -49,14 +50,19 @@ var enemy_bench: Array = []                 # 적 정령사가 아직 소환하�
 var active: BattleUnit = null
 var inspected: BattleUnit = null
 var inspected_cell := Vector2i(-1, -1)  # 유닛 없는 칸을 눌렀을 때 지형 정보 표시용
-## idle / player / targeting / placing / busy / enemy / over
+## select(아군 고르는 중) / player(선택한 유닛 조작) / targeting / placing / busy / enemy / over
 var phase := "idle"
 var has_moved := false
-var submenu := ""               # "", "skills", "summon"
+var move_origin := Vector2i(-1, -1)  # 이동 취소용
+var submenu := ""               # "", "skills"(정령 스킬), "sskills"(정령사 스킬), "summon"
 var pending: Dictionary = {}
 var reachable: Dictionary = {}  # Vector2i -> 비용
 var targets: Dictionary = {}    # Vector2i -> BattleUnit
 var place_cells: Dictionary = {}  # 소환할 수 있는 칸 Vector2i -> true
+## 누른 유닛의 이동 범위 / 공격 가능 범위 (표시용 캐시)
+var inspect_move: Dictionary = {}
+var inspect_threat: Dictionary = {}
+var _inspect_key := ""
 var participated: Array = []    # 이번 전투에 소환된 계약 Spirit
 var defeated: Array = []        # 쓰러뜨린 야생 Spirit
 var captured: Array = []        # 계약한 야생 Spirit
@@ -260,19 +266,124 @@ func _recall(u: BattleUnit) -> void:
 
 func _start_round() -> void:
 	round_num += 1
-	if round_num > 1:
-		_apply_round_terrain()
-	turn_queue = []
 	for o in units:
 		var u: BattleUnit = o
-		if u.is_active():
-			turn_queue.append(u)
-			if round_num > 1:
-				var regen := (u.spirit as Summoner).mp_regen() if u.is_summoner else BattleLogic.MP_REGEN_PER_ROUND
-				u.spirit.mp = mini(u.spirit.max_mp(), u.spirit.mp + regen)
-	turn_queue.sort_custom(_compare_speed)
-	turn_index = -1
-	_next_turn()
+		u.done = false
+		if round_num > 1 and u.is_active():
+			u.tick_buffs()
+			var regen := (u.spirit as Summoner).mp_regen() if u.is_summoner else BattleLogic.MP_REGEN_PER_ROUND
+			u.spirit.mp = mini(u.spirit.max_mp(), u.spirit.mp + regen)
+	if round_num > 1:
+		_apply_round_terrain()
+	if _check_end():
+		return
+	_start_player_phase()
+
+
+# ---------------------------------------------------------------- 아군 턴
+
+func _start_player_phase() -> void:
+	_clear_selection()
+	if _ready_allies().is_empty():
+		_start_enemy_phase()
+		return
+	phase = "select"
+	_mark_ui()
+
+
+## 이번 아군 턴에 아직 행동할 수 있는 유닛 (방금 소환된 정령 제외)
+func _ready_allies() -> Array:
+	var result := []
+	for o in units:
+		var u: BattleUnit = o
+		if _is_ready(u):
+			result.append(u)
+	return result
+
+
+func _is_ready(u: BattleUnit) -> bool:
+	return u != null and u.team == 0 and u.is_active() and not u.done and u.joined_round < round_num
+
+
+func _clear_selection() -> void:
+	active = null
+	has_moved = false
+	move_origin = Vector2i(-1, -1)
+	submenu = ""
+	pending = {}
+	reachable = {}
+	targets = {}
+	place_cells = {}
+
+
+func _select_unit(u: BattleUnit) -> void:
+	_clear_selection()
+	active = u
+	inspected = null
+	inspected_cell = Vector2i(-1, -1)
+	reachable = _reachable_for(u)
+	phase = "player"
+	_mark_ui()
+
+
+func _deselect() -> void:
+	_clear_selection()
+	phase = "select"
+	_mark_ui()
+
+
+## 선택한 유닛의 행동이 끝났을 때
+func _finish_unit() -> void:
+	if active != null:
+		active.done = true
+	_clear_selection()
+	if _check_end():
+		return
+	if _ready_allies().is_empty():
+		_start_enemy_phase()
+	else:
+		phase = "select"
+		_mark_ui()
+
+
+func _on_end_phase() -> void:
+	if phase != "select" and phase != "player":
+		return
+	if phase == "player" and has_moved:
+		_log("먼저 행동하거나 이동을 취소하세요.")
+		return
+	for o in _ready_allies():
+		var bu: BattleUnit = o
+		bu.done = true
+	_start_enemy_phase()
+
+
+# ---------------------------------------------------------------- 적 턴
+
+func _start_enemy_phase() -> void:
+	_clear_selection()
+	phase = "enemy"
+	_mark_ui()
+	var order := []
+	for o in units:
+		var u: BattleUnit = o
+		if u.team == 1 and u.is_active() and u.joined_round < round_num:
+			order.append(u)
+	order.sort_custom(_compare_speed)
+	for o in order:
+		var u: BattleUnit = o
+		if not u.is_active():
+			continue
+		active = u
+		_mark_ui()
+		if u.is_summoner:
+			await _run_enemy_summoner_turn(u)
+		else:
+			await _run_enemy_turn(u)
+		active = null
+		if _check_end():
+			return
+	_start_round()
 
 
 ## 라운드 시작 시 지형 효과: 물가/용암의 회복, 용암 화상
@@ -306,45 +417,6 @@ func _compare_speed(a: BattleUnit, b: BattleUnit) -> bool:
 	if sa == sb:
 		return a.team < b.team
 	return sa > sb
-
-
-func _next_turn() -> void:
-	if _check_end():
-		return
-	turn_index += 1
-	while turn_index < turn_queue.size() and not (turn_queue[turn_index] as BattleUnit).is_active():
-		turn_index += 1
-	if turn_index >= turn_queue.size():
-		_start_round()
-		return
-	active = turn_queue[turn_index]
-	has_moved = false
-	submenu = ""
-	inspected = null
-	inspected_cell = Vector2i(-1, -1)
-	pending = {}
-	targets = {}
-	place_cells = {}
-	if active.team == 0:
-		phase = "player"
-		reachable = _reachable_for(active)
-		_mark_ui()
-	else:
-		reachable = {}
-		if active.is_summoner:
-			_run_enemy_summoner_turn()
-		else:
-			_run_enemy_turn()
-
-
-func _end_turn() -> void:
-	active = null
-	phase = "idle"
-	reachable = {}
-	targets = {}
-	place_cells = {}
-	pending = {}
-	_next_turn()
 
 
 func _check_end() -> bool:
@@ -385,10 +457,6 @@ func _finish(victory: bool) -> void:
 			var s: Spirit = o
 			var amount := total_xp if participated.has(s) else int(round(total_xp * BENCH_XP_RATIO))
 			lines.append_array(s.gain_xp(amount))
-		for o in captured:
-			var s: Spirit = o
-			var where := GameState.add_captured(s)
-			lines.append("%s 계약 완료 → %s" % [s.display_name(), where])
 		if beat_rival or rng.randf() < 0.4:
 			var eid := GameData.random_equipment(rng)
 			GameState.inventory.append(eid)
@@ -397,10 +465,22 @@ func _finish(victory: bool) -> void:
 	else:
 		lines.append("%s이(가) 쓰러졌다..." % GameState.summoner.display_name())
 		lines.append("정령들과 함께 거점으로 돌아가 회복합니다.")
+	lines.append_array(_keep_captured())
 	GameState.heal_all()
 	GameState.save_game()
 	_mark_ui()
 	_show_result(victory, lines)
+
+
+## 디스펠로 계약한 정령은 승패·후퇴와 관계없이 내 정령이 된다.
+func _keep_captured() -> Array[String]:
+	var lines: Array[String] = []
+	for o in captured:
+		var s: Spirit = o
+		var where := GameState.add_captured(s)
+		lines.append("%s 계약 완료 → %s" % [s.display_name(), where])
+	captured = []
+	return lines
 
 
 # ================================================================ 이동/피해 공용
@@ -411,19 +491,20 @@ func _move_cost_fn(u: BattleUnit) -> Callable:
 
 
 func _reachable_for(u: BattleUnit) -> Dictionary:
-	return grid.reachable(u.cell, u.spirit.stat("mov"), _occupied(u), _move_cost_fn(u))
+	return grid.reachable(u.cell, u.spirit.stat("mov") + u.stat_add("mov"), _occupied(u), _move_cost_fn(u))
 
 
 func _attack_power(u: BattleUnit) -> int:
 	if u.is_summoner:
-		return GameState.summoner.attack_power()
+		return (u.spirit as Summoner).attack_power()
 	return BattleLogic.BASIC_ATTACK_POWER
 
 
 ## 지형까지 반영한 피해 계산. use_rng=false면 기대값.
 func _damage(attacker: BattleUnit, from_cell: Vector2i, target: BattleUnit, power: int, element: String, use_rng: bool) -> int:
 	return BattleLogic.calc_damage(attacker.spirit, target.spirit, power, element,
-		rng if use_rng else null, grid.terrain_at(from_cell), grid.terrain_at(target.cell))
+		rng if use_rng else null, grid.terrain_at(from_cell), grid.terrain_at(target.cell),
+		attacker.stat_mult("atk"), target.stat_mult("def"))
 
 
 func _unit_at(c: Vector2i) -> BattleUnit:
@@ -462,13 +543,23 @@ func _on_tap(pos: Vector2) -> void:
 		return
 	var u := _unit_at(c)
 	match phase:
+		"select":
+			if _is_ready(u):
+				_select_unit(u)
+			else:
+				_inspect(u, c)
 		"player":
 			if not has_moved and reachable.has(c):
 				_move_player(c)
+			elif u == active and not has_moved:
+				_deselect()
+			elif _is_ready(u) and u != active:
+				if has_moved:
+					_log("먼저 행동하거나 이동을 취소하세요.")
+				else:
+					_select_unit(u)
 			else:
-				inspected = u if u != active else null
-				inspected_cell = c if u == null else Vector2i(-1, -1)
-				_mark_ui()
+				_inspect(u if u != active else null, c)
 		"targeting":
 			if targets.has(c):
 				_execute_player_action(targets[c])
@@ -481,6 +572,53 @@ func _on_tap(pos: Vector2) -> void:
 				_cancel_targeting()
 
 
+## 이 유닛이 쓸 수 있는 가장 긴 공격 사거리 (일반 공격 / 정령 스킬 / 정령사 공격 스킬)
+func _max_attack_range(u: BattleUnit) -> int:
+	var r := BattleLogic.BASIC_ATTACK_RANGE
+	if u.is_summoner:
+		for o in (u.spirit as Summoner).skill_ids:
+			var sk: Dictionary = GameData.summoner_skills[str(o)]
+			if str(sk.get("type", "")) in ["attack", "debuff"]:
+				r = maxi(r, int(sk.get("range_max", 1)))
+	else:
+		for sid in u.spirit.known_skills():
+			r = maxi(r, int(GameData.skills[sid]["range_max"]))
+	return r
+
+
+## 누른 유닛이 다음 차례에 갈 수 있는 칸과, 거기서 공격이 닿는 칸을 계산해 둔다.
+func _update_inspect_overlay() -> void:
+	var key := ""
+	if inspected != null and inspected.is_active():
+		key = "%d:%s:%d:%d" % [inspected.get_instance_id(), str(inspected.cell), round_num, units.size()]
+	if key == _inspect_key:
+		return
+	_inspect_key = key
+	inspect_move = {}
+	inspect_threat = {}
+	if key == "":
+		return
+	inspect_move = _reachable_for(inspected)
+	inspect_move[inspected.cell] = 0
+	var rmax := _max_attack_range(inspected)
+	for row in ROWS:
+		for col in COLS:
+			var c := Vector2i(col, row)
+			if inspect_move.has(c) or grid.blocked.has(c):
+				continue
+			for m in inspect_move:
+				var d := grid.distance(m, c)
+				if d >= 1 and d <= rmax:
+					inspect_threat[c] = true
+					break
+
+
+func _inspect(u: BattleUnit, c: Vector2i) -> void:
+	inspected = u
+	inspected_cell = c if u == null else Vector2i(-1, -1)
+	_mark_ui()
+
+
 # ================================================================ 아군 행동
 
 func _move_player(c: Vector2i) -> void:
@@ -488,10 +626,25 @@ func _move_player(c: Vector2i) -> void:
 	submenu = ""
 	inspected = null
 	inspected_cell = Vector2i(-1, -1)
+	move_origin = active.cell
 	_mark_ui()
 	await _animate_move(active, c)
 	has_moved = true
 	reachable = {}
+	phase = "player"
+	_mark_ui()
+
+
+func _undo_move() -> void:
+	if phase != "player" or not has_moved:
+		return
+	phase = "busy"
+	submenu = ""
+	_mark_ui()
+	await _animate_move(active, move_origin)
+	has_moved = false
+	move_origin = Vector2i(-1, -1)
+	reachable = _reachable_for(active)
 	phase = "player"
 	_mark_ui()
 
@@ -515,6 +668,11 @@ func _choose_skill(sid: String) -> void:
 	_begin_targeting({"type": "skill", "skill_id": sid})
 
 
+func _choose_summoner_skill(sid: String) -> void:
+	submenu = ""
+	_begin_targeting({"type": "sskill", "skill_id": sid})
+
+
 func _on_dispel() -> void:
 	_begin_targeting({"type": "dispel"})
 
@@ -528,7 +686,7 @@ func _on_recall() -> void:
 		_recall(active)
 		_mark_ui()
 		await get_tree().create_timer(ACTION_DELAY).timeout
-		_end_turn()
+		_finish_unit()
 
 
 func _choose_summon(s: Spirit) -> void:
@@ -553,22 +711,28 @@ func _execute_summon(s: Spirit, cell: Vector2i) -> void:
 	_summon(s, cell, true, 0)
 	_mark_ui()
 	await get_tree().create_timer(ACTION_DELAY).timeout
-	_end_turn()
+	_finish_unit()
 
 
 func _on_wait() -> void:
 	if phase != "player":
 		return
 	_log("%s은(는) 대기했다." % active.spirit.display_name())
-	_end_turn()
+	_finish_unit()
 
 
+## 후퇴해도 디스펠로 계약한 정령은 데려간다. (경험치·장비 보상은 없음)
 func _on_retreat() -> void:
-	if phase != "player":
+	if phase != "select" and not (phase == "player" and not has_moved):
 		return
 	phase = "over"
+	var lines := _keep_captured()
 	GameState.heal_all()
 	GameState.save_game()
+	if lines.is_empty():
+		GameState.hub_message = "전투에서 후퇴했습니다."
+	else:
+		GameState.hub_message = "후퇴했습니다. " + " / ".join(PackedStringArray(lines))
 	get_tree().change_scene_to_file("res://scenes/hub.tscn")
 
 
@@ -588,6 +752,7 @@ func _begin_targeting(action: Dictionary) -> void:
 
 func _cancel_targeting() -> void:
 	phase = "player"
+	submenu = ""
 	pending = {}
 	targets = {}
 	place_cells = {}
@@ -601,13 +766,15 @@ func _execute_player_action(target: BattleUnit) -> void:
 	targets = {}
 	_mark_ui()
 	await _perform(active, action, target)
-	_end_turn()
+	_finish_unit()
 
 
 ## from_cell에서 action을 쓸 때 고를 수 있는 대상: 칸 -> BattleUnit
 func _targets_for(u: BattleUnit, from_cell: Vector2i, action: Dictionary) -> Dictionary:
 	var result := {}
 	var kind := str(action["type"])
+	if kind == "sskill":
+		return _summoner_skill_targets(u, from_cell, GameData.summoner_skills[action["skill_id"]])
 	if kind == "recall":
 		for o in units:
 			var ally: BattleUnit = o
@@ -638,6 +805,52 @@ func _targets_for(u: BattleUnit, from_cell: Vector2i, action: Dictionary) -> Dic
 	return result
 
 
+## 정령사 스킬 대상. target: enemy / ally(정령사 자신 포함) / self
+func _summoner_skill_targets(u: BattleUnit, from_cell: Vector2i, sk: Dictionary) -> Dictionary:
+	var result := {}
+	var side := str(sk.get("target", "enemy"))
+	if side == "self":
+		result[u.cell] = u
+		return result
+	var rmin := int(sk.get("range_min", 1))
+	var rmax := int(sk.get("range_max", 1))
+	for o in units:
+		var other: BattleUnit = o
+		if not other.is_active():
+			continue
+		if (side == "enemy") == (other.team == u.team):
+			continue
+		var d := grid.distance(from_cell, other.cell)
+		if d >= rmin and d <= rmax:
+			result[other.cell] = other
+	return result
+
+
+## 범위(area)가 있으면 대상 칸 주변의 같은 편 모두, 없으면 대상 하나
+func _skill_area_units(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> Array:
+	var area := int(sk.get("area", 0))
+	if area <= 0:
+		return [target]
+	var allies_side := str(sk.get("target", "enemy")) != "enemy"
+	var result := []
+	for o in units:
+		var other: BattleUnit = o
+		if not other.is_active() or ((other.team == u.team) != allies_side):
+			continue
+		if grid.distance(target.cell, other.cell) <= area:
+			result.append(other)
+	return result
+
+
+func _pending_targets_allies() -> bool:
+	match str(pending.get("type", "")):
+		"recall":
+			return true
+		"sskill":
+			return str(GameData.summoner_skills[pending["skill_id"]].get("target", "enemy")) != "enemy"
+	return false
+
+
 # ================================================================ 행동 처리 (공용)
 
 func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
@@ -656,7 +869,38 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 			_try_dispel(u, target)
 		"recall":
 			_recall(target)
+		"sskill":
+			_cast_summoner_skill(u, target, GameData.summoner_skills[action["skill_id"]])
 	await get_tree().create_timer(ACTION_DELAY).timeout
+
+
+func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> void:
+	var s := u.spirit
+	s.mp = maxi(0, s.mp - int(sk["mp"]))
+	var skill_name := str(sk["name"])
+	match str(sk["type"]):
+		"attack":
+			var dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), true)
+			_hit(u, target, dmg, skill_name, str(sk["element"]))
+		"heal":
+			for o in _skill_area_units(u, target, sk):
+				var t: BattleUnit = o
+				var amount := mini(BattleLogic.heal_amount(s, t.spirit, sk), t.spirit.max_hp() - t.spirit.hp)
+				t.spirit.hp += amount
+				_effect("+%d" % amount, t.draw_pos, Color(0.5, 1.0, 0.6))
+				_log("%s의 %s! %s의 HP %d 회복" % [s.display_name(), skill_name, t.spirit.display_name(), amount])
+		"buff", "debuff":
+			for o in _skill_area_units(u, target, sk):
+				var t: BattleUnit = o
+				var stat_key := str(sk["stat"])
+				# 같은 스킬을 다시 걸면 덮어쓴다 (중첩 방지)
+				t.buffs = t.buffs.filter(func(b): return b["name"] != skill_name)
+				t.buffs.append({"name": skill_name, "stat": stat_key, "mult": float(sk.get("mult", 1.0)),
+					"add": int(sk.get("add", 0)), "rounds": int(sk.get("rounds", 2))})
+				var up := str(sk["type"]) == "buff"
+				_effect("%s%s" % [Spirit.STAT_NAMES.get(stat_key, stat_key), "▲" if up else "▼"], t.draw_pos,
+					Color(0.5, 1.0, 0.6) if up else COLOR_OWNED_RING)
+				_log("%s의 %s! %s — %s" % [s.display_name(), skill_name, t.spirit.display_name(), str(sk.get("desc", ""))])
 
 
 func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: String, element: String) -> void:
@@ -726,27 +970,20 @@ func _animate_move(u: BattleUnit, c: Vector2i) -> void:
 
 # ================================================================ 적 AI
 
-func _run_enemy_turn() -> void:
-	phase = "enemy"
-	_mark_ui()
+func _run_enemy_turn(u: BattleUnit) -> void:
 	await get_tree().create_timer(ENEMY_DELAY).timeout
-	var u := active
 	var plan := _plan_enemy(u)
 	var dest: Vector2i = plan["cell"]
 	if dest != u.cell:
 		await _animate_move(u, dest)
 	if plan.has("action"):
 		await _perform(u, plan["action"], plan["target"])
-	_end_turn()
 
 
-## 적 정령사의 차례: 아군과 거리를 두고 자리를 잡은 뒤, 소환할 수 있으면 소환하고
-## 아니면 옆에 있는 적을 공격한다.
-func _run_enemy_summoner_turn() -> void:
-	phase = "enemy"
-	_mark_ui()
+## 적 정령사의 차례: 아군과 거리를 두고 자리를 잡은 뒤
+## 소환 → (회복/공격) 스킬 → 옆의 적 공격 순으로 할 수 있는 것을 한다.
+func _run_enemy_summoner_turn(u: BattleUnit) -> void:
 	await get_tree().create_timer(ENEMY_DELAY).timeout
-	var u := active
 	var m: Summoner = u.spirit
 	var want_summon := not _enemy_summon_choices(m).is_empty()
 
@@ -774,8 +1011,12 @@ func _run_enemy_summoner_turn() -> void:
 		if place.x >= 0:
 			_summon(_pick_enemy_summon(m), place, true, 1)
 			await get_tree().create_timer(ACTION_DELAY).timeout
-			_end_turn()
 			return
+
+	var skill_plan := _enemy_summoner_skill_plan(u, m)
+	if not skill_plan.is_empty():
+		await _perform(u, skill_plan["action"], skill_plan["target"])
+		return
 
 	var t := _targets_for(u, u.cell, {"type": "attack"})
 	if not t.is_empty():
@@ -787,7 +1028,36 @@ func _run_enemy_summoner_turn() -> void:
 		await _perform(u, {"type": "attack"}, target)
 	else:
 		_log("적 정령사 %s은(는) 상황을 살피고 있다." % m.display_name())
-	_end_turn()
+
+
+## 적 정령사 스킬 선택: HP 50% 미만 아군이 있으면 회복, 아니면 기대 피해가 가장 큰 공격 스킬
+func _enemy_summoner_skill_plan(u: BattleUnit, m: Summoner) -> Dictionary:
+	var best := {}
+	var best_score := 0.0
+	for o in m.skill_ids:
+		var sid := str(o)
+		var sk: Dictionary = GameData.summoner_skills[sid]
+		if m.mp < int(sk["mp"]):
+			continue
+		var action := {"type": "sskill", "skill_id": sid}
+		var t := _summoner_skill_targets(u, u.cell, sk)
+		for tcell in t:
+			var target: BattleUnit = t[tcell]
+			var score := 0.0
+			match str(sk["type"]):
+				"heal":
+					for p in _skill_area_units(u, target, sk):
+						var ally: BattleUnit = p
+						var ratio := float(ally.spirit.hp) / float(maxi(1, ally.spirit.max_hp()))
+						if ratio < 0.5:
+							score += float(mini(BattleLogic.heal_amount(m, ally.spirit, sk), ally.spirit.max_hp() - ally.spirit.hp))
+				"attack":
+					var dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), false)
+					score = float(mini(dmg, target.spirit.hp)) + (30.0 if dmg >= target.spirit.hp else 0.0)
+			if score > best_score:
+				best_score = score
+				best = {"action": action, "target": target}
+	return best
 
 
 ## 적 정령사가 지금 MP로 소환할 수 있는 정령들
@@ -902,6 +1172,7 @@ func _nearest_foe_distance(u: BattleUnit, cell: Vector2i) -> int:
 # ================================================================ 그리기
 
 func _draw() -> void:
+	_update_inspect_overlay()
 	draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), COLOR_BG)
 	for row in ROWS:
 		for col in COLS:
@@ -940,7 +1211,7 @@ func _cell_color(c: Vector2i) -> Color:
 		return base
 	var pulse := 0.5 + 0.5 * sin(time * 6.0)
 	if phase == "targeting" and targets.has(c):
-		var tint := COLOR_ALLY_TARGET if pending.get("type", "") == "recall" else COLOR_TARGET
+		var tint := COLOR_ALLY_TARGET if _pending_targets_allies() else COLOR_TARGET
 		return base.lerp(tint, 0.5 + 0.2 * pulse)
 	if phase == "placing" and place_cells.has(c):
 		return base.lerp(COLOR_PLACE, 0.45 + 0.2 * pulse)
@@ -948,6 +1219,11 @@ func _cell_color(c: Vector2i) -> Color:
 		return base.lerp(COLOR_MOVE, 0.5)
 	if active != null and active.cell == c:
 		return base.lerp(COLOR_ACTIVE_CELL, 0.35)
+	if phase in ["select", "player"]:
+		if inspect_move.has(c):
+			return base.lerp(COLOR_INSPECT_MOVE, 0.4)
+		if inspect_threat.has(c):
+			return base.lerp(COLOR_INSPECT_THREAT, 0.3)
 	return base
 
 
@@ -1000,6 +1276,12 @@ func _draw_unit(u: BattleUnit) -> void:
 		if u.joined_round >= round_num and (u.team == 0 or u.owned):
 			# 이번 라운드에 소환되어 아직 행동하지 못하는 정령
 			draw_arc(p, 34.0, 0.0, TAU, 40, Color(0.55, 0.85, 1.0, 0.5), 2.0)
+	if u.team == 0 and phase in ["select", "player", "targeting", "placing", "busy"]:
+		if u.done or u.joined_round >= round_num:
+			draw_circle(p, 31.0, Color(0, 0, 0, 0.45))  # 이번 턴 행동 끝
+		elif u != active:
+			draw_circle(p + Vector2(24, -24), 6.0, Color(0.45, 1.0, 0.55))  # 행동 가능
+	_draw_buff_marks(u, p)
 	_draw_text(u.spirit.display_name(), p + Vector2(0, 2), 16, Color.WHITE)
 	_draw_text("Lv%d" % u.spirit.level, p + Vector2(0, 20), 14, Color(1, 1, 1, 0.85))
 	var ratio := float(u.spirit.hp) / float(maxi(1, u.spirit.max_hp()))
@@ -1007,6 +1289,20 @@ func _draw_unit(u: BattleUnit) -> void:
 	draw_rect(bar, Color(0, 0, 0, 0.75))
 	var hp_color := Color(0.4, 0.9, 0.45) if ratio > 0.5 else (Color(0.95, 0.8, 0.3) if ratio > 0.25 else Color(0.95, 0.35, 0.3))
 	draw_rect(Rect2(bar.position, Vector2(56.0 * ratio, 6)), hp_color)
+
+
+func _draw_buff_marks(u: BattleUnit, p: Vector2) -> void:
+	var up := false
+	var down := false
+	for b in u.buffs:
+		if float(b.get("mult", 1.0)) > 1.0 or int(b.get("add", 0)) > 0:
+			up = true
+		else:
+			down = true
+	if up:
+		_draw_text("▲", p + Vector2(-26, -20), 16, Color(0.5, 1.0, 0.6))
+	if down:
+		_draw_text("▼", p + Vector2(-26, -2), 16, COLOR_OWNED_RING)
 
 
 ## pos.y는 글자 아랫선(baseline) 기준, x는 가운데 정렬
@@ -1028,6 +1324,17 @@ func _preview_text(t: BattleUnit) -> String:
 			return "-%d" % _damage(active, active.cell, t, _attack_power(active), active.spirit.element(), false)
 		"recall":
 			return "귀환"
+		"sskill":
+			var ssk: Dictionary = GameData.summoner_skills[pending["skill_id"]]
+			match str(ssk["type"]):
+				"attack":
+					return "-%d" % _damage(active, active.cell, t, int(ssk["power"]), str(ssk["element"]), false)
+				"heal":
+					return "+%d" % mini(BattleLogic.heal_amount(active.spirit, t.spirit, ssk), t.spirit.max_hp() - t.spirit.hp)
+				"buff":
+					return "▲"
+				"debuff":
+					return "▼"
 	return ""
 
 
@@ -1089,7 +1396,7 @@ func _build_ui() -> void:
 	hint_label = UIKit.label("", 21, UIKit.GOLD)
 	vb.add_child(hint_label)
 	action_box = GridContainer.new()
-	action_box.columns = 3
+	action_box.columns = 4
 	action_box.add_theme_constant_override("h_separation", 10)
 	action_box.add_theme_constant_override("v_separation", 10)
 	action_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1109,11 +1416,13 @@ func _rebuild_ui() -> void:
 		action_box.remove_child(c)
 		c.queue_free()
 
-	if active != null:
-		var who := _unit_tag(active)
-		turn_label.text = "라운드 %d · %s %s의 차례" % [round_num, who, active.spirit.display_name()]
-	elif phase == "over":
+	if phase == "over":
 		turn_label.text = "전투 종료"
+	elif phase == "enemy":
+		var who := "" if active == null else " — %s %s" % [_unit_tag(active), active.spirit.display_name()]
+		turn_label.text = "라운드 %d · 적 턴%s" % [round_num, who]
+	else:
+		turn_label.text = "라운드 %d · 아군 턴 (남은 행동 %d)" % [round_num, _ready_allies().size()]
 
 	if inspected != null:
 		info_label.text = _unit_info(inspected)
@@ -1123,6 +1432,10 @@ func _rebuild_ui() -> void:
 		info_label.text = _unit_info(active)
 
 	match phase:
+		"select":
+			_add_action("턴 종료", _on_end_phase)
+			_add_action("후퇴", _on_retreat)
+			hint_label.text = "행동할 아군을 고르세요. (초록 점 = 행동 가능, 순서 자유)\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위"
 		"player":
 			if active.is_summoner:
 				_build_summoner_actions()
@@ -1135,6 +1448,9 @@ func _rebuild_ui() -> void:
 					hint_label.text = "계약할 정령을 누르세요. (숫자 = 성공 확률, 적 정령사의 정령은 더 어려움)"
 				"recall":
 					hint_label.text = "귀환시킬 정령을 누르세요."
+				"sskill":
+					var ssk: Dictionary = GameData.summoner_skills[pending["skill_id"]]
+					hint_label.text = "%s: 대상을 누르세요. — %s" % [ssk["name"], ssk.get("desc", "")]
 				_:
 					hint_label.text = "공격할 대상을 누르세요. (숫자 = 예상 피해)"
 		"placing":
@@ -1149,7 +1465,17 @@ func _rebuild_ui() -> void:
 
 
 func _move_hint() -> String:
-	return "파란 칸을 눌러 이동하거나 행동을 고르세요." if not has_moved else "행동을 고르세요."
+	if has_moved:
+		return "행동을 고르세요. (잘못 움직였다면 '이동 취소')"
+	return "파란 칸으로 이동하거나 행동을 고르세요. 자신을 다시 누르면 선택 해제."
+
+
+func _add_common_actions() -> void:
+	if has_moved:
+		_add_action("이동 취소", _undo_move)
+	else:
+		_add_action("선택 해제", _deselect)
+	_add_action("대기", _on_wait)
 
 
 func _build_summoner_actions() -> void:
@@ -1163,12 +1489,20 @@ func _build_summoner_actions() -> void:
 		_add_action("뒤로", _close_submenu)
 		hint_label.text = "소환할 정령을 고르세요. (%d/%d 소환 중)" % [_summoned_count(), m.summon_limit()]
 		return
+	if submenu == "sskills":
+		for o in m.skill_ids:
+			var sid := str(o)
+			var sk: Dictionary = GameData.summoner_skills[sid]
+			_add_action("%s\nMP %d" % [sk["name"], int(sk["mp"])], func(): _choose_summoner_skill(sid), m.mp < int(sk["mp"]))
+		_add_action("뒤로", _close_submenu)
+		hint_label.text = "정령사 스킬을 고르세요."
+		return
 	_add_action("소환", _open_submenu.bind("summon"), not _can_summon_more())
 	_add_action("귀환", _on_recall, _summoned_count() == 0)
 	_add_action("디스펠\nMP %d" % m.dispel_cost(), _on_dispel, m.mp < m.dispel_cost())
+	_add_action("스킬", _open_submenu.bind("sskills"), m.skill_ids.is_empty())
 	_add_action("공격", _on_attack)
-	_add_action("대기", _on_wait)
-	_add_action("후퇴", _on_retreat)
+	_add_common_actions()
 	hint_label.text = _move_hint()
 
 
@@ -1183,13 +1517,13 @@ func _build_spirit_actions() -> void:
 	_add_action("공격", _on_attack)
 	_add_action("스킬", _open_submenu.bind("skills"), active.spirit.known_skills().is_empty())
 	_add_action("귀환", _on_recall)
-	_add_action("대기", _on_wait)
+	_add_common_actions()
 	hint_label.text = _move_hint()
 
 
 func _add_action(text: String, cb: Callable, disabled: bool = false) -> void:
 	var b := UIKit.button(text, cb, disabled, 72)
-	b.add_theme_font_size_override("font_size", 24)
+	b.add_theme_font_size_override("font_size", 21)
 	action_box.add_child(b)
 
 
@@ -1201,6 +1535,9 @@ func _unit_info(u: BattleUnit) -> String:
 	var extra := ""
 	if u.is_summoner:
 		extra = "   소환 %d/%d" % [_summoned_count(u.team), (s as Summoner).summon_limit()]
+	extra += "  사거리%d" % _max_attack_range(u)
+	for b in u.buffs:
+		extra += "  [%s %d]" % [b["name"], int(b["rounds"])]
 	return "[%s] %s  Lv.%d  %s 속성\nHP %d/%d  MP %d/%d  공%d 방%d 속%d 이동%d%s\n%s" % [
 		tag, s.display_name(), s.level, GameData.element_name(s.element()),
 		s.hp, s.max_hp(), s.mp, s.max_mp(),

@@ -20,6 +20,7 @@ var skills: Dictionary = {}
 var equipment: Dictionary = {}
 var terrains: Dictionary = {}
 var summoner_data: Dictionary = {}
+var summoner_skills: Dictionary = {}
 
 var ui_font: Font
 var theme: Theme
@@ -31,6 +32,7 @@ func _ready() -> void:
 	equipment = _load_json("res://data/equipment.json")
 	terrains = _load_json("res://data/terrain.json")
 	summoner_data = _load_json("res://data/summoner.json")
+	summoner_skills = _load_json("res://data/summoner_skills.json")
 	_setup_theme()
 
 

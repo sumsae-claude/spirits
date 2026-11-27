@@ -13,6 +13,12 @@ var is_summoner := false
 var owned := false         # 적 정령사가 소환한 정령 (주인이 있음)
 var is_guardian := false   # 스토리 보스 수호 정령
 var revealed := false      # 수호 정령의 실이 드러남 (디스펠 가능)
+## 연출용 (로직에는 영향 없음)
+var anim_offset := Vector2.ZERO  # 공격 돌진·피격 흔들림
+var flash := 0.0                 # 피격 시 붉게 번쩍
+var fade := 1.0                  # 투명도 (소환 등장·퇴장)
+var pop := 1.0                   # 크기 배율 (소환 등장·퇴장)
+var vanishing := false           # 쓰러짐/계약/귀환으로 사라지는 중
 var joined_round := 0      # 전장에 나온 라운드 (그 라운드에는 행동하지 않음)
 var done := false          # 이번 진영 턴에 행동을 마침
 ## 버프/디버프: [{"name", "stat", "mult", "add", "rounds"}]

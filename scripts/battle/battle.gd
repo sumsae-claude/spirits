@@ -15,7 +15,7 @@ const HEX_SIZE := 44.0
 const MAP_TOP := 130.0
 const PANEL_HEIGHT := 460.0
 const ENEMY_DELAY := 0.35
-const ACTION_DELAY := 0.55
+const ACTION_DELAY := 0.3
 const ENEMY_SPAWN_COLS := [3, 4, 2, 5]
 const SUMMONER_CELL := Vector2i(3, 9)   # 맨 아래 행
 const VANGUARD_CELL := Vector2i(3, 8)   # 정령사 바로 위
@@ -83,6 +83,8 @@ var participated: Array = []    # 이번 전투에 소환된 계약 Spirit
 var defeated: Array = []        # 쓰러뜨린 야생 Spirit
 var captured: Array = []        # 계약한 야생 Spirit
 var effects: Array = []         # 떠오르는 텍스트
+var fx: Array = []              # 공격·소환·퇴장 시각 효과 {"kind", "pos", "color", "t", "dur", ...}
+var battle_speed := 1
 var rng := RandomNumberGenerator.new()
 var font: Font
 var time := 0.0
@@ -100,6 +102,8 @@ var _ui_dirty := true
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST  # 도트가 흐려지지 않게
+	battle_speed = int(GameState.flags.get("battle_speed", 1))
+	Engine.time_scale = float(battle_speed)
 	rng.randomize()
 	font = GameData.ui_font
 	var vp_w := get_viewport_rect().size.x
@@ -112,11 +116,25 @@ func _ready() -> void:
 	_start_round()
 
 
+func _exit_tree() -> void:
+	Engine.time_scale = 1.0  # 배속은 전투에서만
+
+
+func _toggle_speed() -> void:
+	battle_speed = 2 if battle_speed == 1 else 1
+	Engine.time_scale = float(battle_speed)
+	GameState.flags["battle_speed"] = battle_speed
+	_mark_ui()
+
+
 func _process(delta: float) -> void:
 	time += delta
 	for e in effects:
 		e["t"] += delta
 	effects = effects.filter(func(e): return e["t"] < 1.0)
+	for f in fx:
+		f["t"] += delta
+	fx = fx.filter(func(f): return f["t"] < f["dur"])
 	queue_redraw()
 	if _ui_dirty:
 		_ui_dirty = false
@@ -282,12 +300,20 @@ func _summon(s: Spirit, cell: Vector2i, pay: bool, team: int) -> BattleUnit:
 		enemy_bench.erase(s)
 		_log("적 정령사 %s이(가) %s을(를) 소환했다!" % [m.display_name(), s.display_name()])
 	_effect("소환!", u.draw_pos, COLOR_PLACE)
+	# 등장 연출: 마법진 + 빛기둥 → 통! 하고 나타남
+	u.pop = 0.0
+	u.fade = 0.0
+	_add_fx("summon", u.draw_pos, GameData.element_color(s.element()).lightened(0.25), 0.8)
+	var tw := create_tween()
+	tw.tween_interval(0.25)
+	tw.tween_property(u, "pop", 1.0, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(u, "fade", 1.0, 0.2)
 	return u
 
 
 func _recall(u: BattleUnit) -> void:
 	u.recalled = true
-	units.erase(u)
+	_vanish(u, "capture", COLOR_ALLY_TARGET)
 	_log("%s이(가) 정령사 곁으로 돌아왔다." % u.spirit.display_name())
 	_effect("귀환", u.draw_pos, COLOR_ALLY_TARGET)
 
@@ -961,6 +987,10 @@ func _make_option(u: BattleUnit, t: BattleUnit, action: Dictionary, name_text: S
 		reason = "사거리 밖"
 	var title := name_text if mp_cost == 0 else "%s (MP %d)" % [name_text, mp_cost]
 	var detail := reason if reason != "" else _preview_for(u, action, t)
+	if reason == "" and str(action.get("type", "")) == "attack" and t.team != u.team:
+		var est := _damage(u, u.cell, t, _attack_power(u), u.spirit.element(), false)
+		if est < t.spirit.hp and _can_counter(t, u):
+			detail += " 반격-%d" % _counter_damage(t, u, false)
 	var el := _action_element(u, action)
 	if reason == "" and el != "" and t.team != u.team:
 		var mult := GameData.element_multiplier(el, t.spirit.element())
@@ -1125,21 +1155,123 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 	var s := u.spirit
 	match str(action["type"]):
 		"attack":
+			await _anim_melee(u, target, s.element())
 			var dmg := _damage(u, u.cell, target, _attack_power(u), s.element(), true)
 			_hit(u, target, dmg, "공격", s.element())
+			await _try_counter(u, target)
 		"skill":
 			var sk: Dictionary = GameData.skills[action["skill_id"]]
 			s.mp = maxi(0, s.mp - int(sk["mp"]))
+			await _anim_cast(u, target, str(sk["element"]))
 			var skill_dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), true)
 			_hit(u, target, skill_dmg, str(sk["name"]), str(sk["element"]))
 		"dispel":
 			s.mp = maxi(0, s.mp - GameState.summoner.dispel_cost())
+			await _anim_thread(u, target)
 			_try_dispel(u, target)
 		"recall":
 			_recall(target)
 		"sskill":
-			_cast_summoner_skill(u, target, GameData.summoner_skills[action["skill_id"]])
+			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
+			if str(ssk["type"]) == "attack":
+				await _anim_cast(u, target, str(ssk["element"]))
+			else:
+				await _anim_hop(u, GameData.element_color(u.spirit.element()))
+			_cast_summoner_skill(u, target, ssk)
 	await get_tree().create_timer(ACTION_DELAY).timeout
+
+
+# ---------------------------------------------------------------- 반격
+
+## 일반 공격(근접)을 받고 살아남은 쪽이 사거리 안이면 반격한다. 반격에는 다시 반격하지 않는다.
+func _try_counter(attacker: BattleUnit, defender: BattleUnit) -> void:
+	if not _can_counter(defender, attacker):
+		return
+	await get_tree().create_timer(0.12).timeout
+	_log("%s의 반격!" % defender.spirit.display_name())
+	await _anim_melee(defender, attacker, defender.spirit.element())
+	_hit(defender, attacker, _counter_damage(defender, attacker, true), "반격", defender.spirit.element())
+
+
+func _can_counter(defender: BattleUnit, attacker: BattleUnit) -> bool:
+	return defender.is_active() and attacker.is_active() \
+		and grid.distance(defender.cell, attacker.cell) <= BattleLogic.BASIC_ATTACK_RANGE
+
+
+func _counter_damage(defender: BattleUnit, attacker: BattleUnit, use_rng: bool) -> int:
+	var dmg := _damage(defender, defender.cell, attacker, _attack_power(defender), defender.spirit.element(), use_rng)
+	return maxi(1, int(round(dmg * BattleLogic.COUNTER_RATIO)))
+
+
+# ---------------------------------------------------------------- 연출 (애니메이션)
+
+## 근접 공격: 살짝 물러났다가 돌진 → 베기 효과
+func _anim_melee(u: BattleUnit, t: BattleUnit, element: String) -> void:
+	var dir := (t.draw_pos - u.draw_pos).normalized()
+	var tw := create_tween()
+	tw.tween_property(u, "anim_offset", -dir * 6.0, 0.08)
+	tw.tween_property(u, "anim_offset", dir * 22.0, 0.08).set_ease(Tween.EASE_IN)
+	await tw.finished
+	_add_fx("slash", t.draw_pos, GameData.element_color(element).lightened(0.35), 0.3, {"dir": dir})
+	var back := create_tween()
+	back.tween_property(u, "anim_offset", Vector2.ZERO, 0.15)
+
+
+## 스킬: 깡충 기를 모으고 → 속성 투사체 발사 → 착탄 폭발
+func _anim_cast(u: BattleUnit, t: BattleUnit, element: String) -> void:
+	var col := GameData.element_color(element).lightened(0.2)
+	await _anim_hop(u, col)
+	var dur := clampf(0.1 + 0.05 * grid.distance(u.cell, t.cell), 0.12, 0.3)
+	_add_fx("projectile", u.draw_pos + Vector2(0, -8), col, dur, {"to": t.draw_pos, "el": element})
+	await get_tree().create_timer(dur).timeout
+	_add_fx("burst", t.draw_pos, col, 0.4, {"el": element})
+
+
+## 기 모으기: 깡충 뛰며 빛이 모여든다
+func _anim_hop(u: BattleUnit, col: Color) -> void:
+	_add_fx("charge", u.draw_pos, col, 0.25)
+	var tw := create_tween()
+	tw.tween_property(u, "anim_offset", Vector2(0, -12), 0.1).set_ease(Tween.EASE_OUT)
+	tw.tween_property(u, "anim_offset", Vector2.ZERO, 0.1).set_ease(Tween.EASE_IN)
+	await tw.finished
+
+
+## 디스펠: 정령사에게서 금빛 실이 뻗어 나간다
+func _anim_thread(u: BattleUnit, t: BattleUnit) -> void:
+	await _anim_hop(u, Color(1.0, 0.85, 0.4))
+	_add_fx("thread", u.draw_pos, Color(1.0, 0.85, 0.4), 0.4, {"to": t.draw_pos})
+	await get_tree().create_timer(0.3).timeout
+
+
+## 피격: 붉게 번쩍 + 좌우 흔들림
+func _hit_react(t: BattleUnit) -> void:
+	t.flash = 1.0
+	var tw := create_tween()
+	tw.tween_property(t, "flash", 0.0, 0.3)
+	var sh := create_tween()
+	sh.tween_property(t, "anim_offset", Vector2(5, 0), 0.04)
+	sh.tween_property(t, "anim_offset", Vector2(-5, 0), 0.05)
+	sh.tween_property(t, "anim_offset", Vector2(3, 0), 0.04)
+	sh.tween_property(t, "anim_offset", Vector2.ZERO, 0.04)
+
+
+## 사라지기: kind = "vanish"(빛이 되어 흩어짐) / "capture"(금빛 고리로 봉인·귀환)
+func _vanish(u: BattleUnit, kind: String, color: Color) -> void:
+	u.vanishing = true
+	_add_fx(kind, u.draw_pos, color, 0.75)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(u, "fade", 0.0, 0.6).set_delay(0.1)
+	if kind == "vanish":
+		tw.tween_property(u, "pop", 0.6, 0.6).set_delay(0.1)
+		tw.tween_property(u, "anim_offset", Vector2(0, -14), 0.6).set_delay(0.1)
+	else:
+		tw.tween_property(u, "pop", 0.2, 0.6).set_delay(0.1)
+
+
+func _add_fx(kind: String, pos: Vector2, color: Color, dur: float, extra: Dictionary = {}) -> void:
+	var f := {"kind": kind, "pos": pos, "color": color, "t": 0.0, "dur": dur}
+	f.merge(extra)
+	fx.append(f)
 
 
 func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> void:
@@ -1155,6 +1287,7 @@ func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> 
 				var t: BattleUnit = o
 				var amount := mini(BattleLogic.heal_amount(s, t.spirit, sk), t.spirit.max_hp() - t.spirit.hp)
 				t.spirit.hp += amount
+				_add_fx("heal", t.draw_pos, Color(0.5, 1.0, 0.6), 0.7)
 				_effect("+%d" % amount, t.draw_pos, Color(0.5, 1.0, 0.6))
 				_log("%s의 %s! %s의 HP %d 회복" % [s.display_name(), skill_name, t.spirit.display_name(), amount])
 		"buff", "debuff":
@@ -1166,6 +1299,7 @@ func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> 
 				t.buffs.append({"name": skill_name, "stat": stat_key, "mult": float(sk.get("mult", 1.0)),
 					"add": int(sk.get("add", 0)), "rounds": int(sk.get("rounds", 2))})
 				var up := str(sk["type"]) == "buff"
+				_add_fx("buff" if up else "debuff", t.draw_pos, Color(0.5, 1.0, 0.6) if up else COLOR_OWNED_RING, 0.7)
 				_effect("%s%s" % [Spirit.STAT_NAMES.get(stat_key, stat_key), "▲" if up else "▼"], t.draw_pos,
 					Color(0.5, 1.0, 0.6) if up else COLOR_OWNED_RING)
 				_log("%s의 %s! %s — %s" % [s.display_name(), skill_name, t.spirit.display_name(), str(sk.get("desc", ""))])
@@ -1188,6 +1322,7 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 		msg += " [%s 엄폐]" % GameData.terrain_name(def_tid)
 	_log(msg)
 	_effect(str(dmg), target.draw_pos, color)
+	_hit_react(target)
 	if target.spirit.hp <= 0:
 		_knock_out(target)
 	_check_guardian_reveal(target)
@@ -1200,6 +1335,7 @@ func _knock_out(target: BattleUnit) -> void:
 		_check_guardian_reveal(target)
 		return
 	target.alive = false
+	_vanish(target, "vanish", Color(1.0, 1.0, 1.0))
 	_log("%s이(가) 쓰러졌다!" % target.spirit.display_name())
 	if target.team != 1:
 		return
@@ -1212,6 +1348,7 @@ func _knock_out(target: BattleUnit) -> void:
 		var u: BattleUnit = o
 		if u.owned and u.is_active():
 			u.recalled = true
+			_vanish(u, "vanish", COLOR_OWNED_RING)
 			_effect("도주", u.draw_pos, COLOR_OWNED_RING)
 			fled += 1
 	if fled > 0:
@@ -1242,12 +1379,14 @@ func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
 	if rng.randf() < chance:
 		target.captured = true
 		captured.append(target.spirit)
+		_vanish(target, "capture", Color(1.0, 0.85, 0.4))
 		if target.is_guardian:
 			_log("디스펠 성공! %s의 실이 풀려 정신을 되찾았다!" % target.spirit.display_name())
 			for o in units:
 				var other: BattleUnit = o
 				if other.team == 1 and other.is_active():
 					other.recalled = true
+					_vanish(other, "vanish", COLOR_OWNED_RING)
 					_effect("물러남", other.draw_pos, COLOR_OWNED_RING)
 			_log("수호 정령이 진정되자 남은 정령들도 물러났다.")
 		elif target.owned:
@@ -1432,6 +1571,12 @@ func _plan_enemy(u: BattleUnit) -> Dictionary:
 					score += 50.0
 				if target.is_summoner:
 					score += 12.0
+				if action["type"] == "attack" and expected < target.spirit.hp:
+					# 반격 받을 피해도 고려
+					var ce := _counter_damage(target, u, false)
+					score -= ce * 0.6
+					if ce >= u.spirit.hp:
+						score -= 30.0
 				score += _terrain_score(u, cell)
 				score -= int(cells[cell]) * 0.1  # 같은 값이면 덜 움직이는 쪽
 				if score > best_score:
@@ -1494,9 +1639,10 @@ func _draw() -> void:
 	_draw_preview_ghost()
 	for o in units:
 		var u: BattleUnit = o
-		if u.is_active():
+		if u.is_active() or (u.vanishing and u.fade > 0.01):
 			_draw_unit(u)
 	_draw_target_marks()
+	_draw_fx()
 
 	if phase == "targeting":
 		for tcell in targets:
@@ -1600,9 +1746,17 @@ func _draw_terrain_deco(tid: String, center: Vector2) -> void:
 
 
 func _draw_unit(u: BattleUnit) -> void:
-	var p := u.draw_pos
+	var p := u.draw_pos + u.anim_offset
 	var el_color := GameData.element_color(u.spirit.element())
 	var tex := GameData.sprite_for(u.spirit)
+	if u.vanishing:
+		# 사라지는 중: 스프라이트만 옅어지며 그린다
+		var vs := (70.0 if u.is_guardian else 60.0) * u.pop
+		if tex != null:
+			draw_texture_rect(tex, Rect2(p + Vector2(-vs * 0.5, -vs * 0.5 - 6.0), Vector2(vs, vs)), false, Color(1, 1, 1, u.fade))
+		else:
+			draw_circle(p, 28.0 * u.pop, Color(el_color, u.fade))
+		return
 	# 진영 색: 아군 흰색(정령사 금색) / 야생 빨강 / 적 정령사의 정령 보라 / 적 정령사 빨강
 	var team_col := Color(0.95, 0.95, 1.0)
 	if u.team == 0 and u.is_summoner:
@@ -1632,10 +1786,14 @@ func _draw_unit(u: BattleUnit) -> void:
 		draw_arc(p, 38.0, 0.0, TAU, 48, Color(1.0, 0.85, 0.35, 0.6 + 0.4 * gp), 3.0)
 
 	if tex != null:
-		var size := 70.0 if u.is_guardian else 60.0
+		var size := (70.0 if u.is_guardian else 60.0) * u.pop
 		var bob := 0.0 if resting else sin(time * 3.0 + float(u.get_instance_id() % 7)) * 1.5
 		var rect := Rect2(p + Vector2(-size * 0.5, -size * 0.5 - 6.0 + bob), Vector2(size, size))
-		draw_texture_rect(tex, rect, false, Color(0.45, 0.45, 0.5) if resting else Color.WHITE)
+		var mod := Color(0.45, 0.45, 0.5) if resting else Color.WHITE
+		if u.flash > 0.0:
+			mod = mod.lerp(Color(1.0, 0.35, 0.35), u.flash)
+		mod.a = u.fade
+		draw_texture_rect(tex, rect, false, mod)
 	else:
 		draw_circle(p, 28.0, el_color.darkened(0.2))
 		draw_arc(p, 28.0, 0.0, TAU, 40, team_col, 3.0)
@@ -1657,6 +1815,104 @@ func _draw_unit(u: BattleUnit) -> void:
 	draw_rect(bar, Color(0, 0, 0, 0.75))
 	var hp_color := Color(0.4, 0.9, 0.45) if ratio > 0.5 else (Color(0.95, 0.8, 0.3) if ratio > 0.25 else Color(0.95, 0.35, 0.3))
 	draw_rect(Rect2(bar.position, Vector2(56.0 * ratio, 6)), hp_color)
+
+
+## 공격·소환·퇴장 시각 효과
+func _draw_fx() -> void:
+	for f in fx:
+		var k := float(f["t"]) / float(f["dur"])   # 0 → 1
+		var c: Color = f["color"]
+		var p: Vector2 = f["pos"]
+		match str(f["kind"]):
+			"slash":
+				var d: Vector2 = f.get("dir", Vector2.RIGHT)
+				var base_a := d.angle() - 1.2
+				for i in 3:
+					var a0 := base_a + i * 0.25 + k * 1.4
+					draw_arc(p, 20.0 + i * 5.0, a0, a0 + 1.3, 10, Color(c, 1.0 - k), 4.0 - i)
+				draw_circle(p, 14.0 * (1.0 - k), Color(1, 1, 1, 0.5 * (1.0 - k)))
+			"charge":
+				draw_arc(p, 38.0 * (1.0 - k) + 6.0, 0.0, TAU, 24, Color(c, k), 3.0)
+				for i in 6:
+					var a := i * TAU / 6.0 + k * 2.0
+					draw_circle(p + Vector2(cos(a), sin(a)) * 30.0 * (1.0 - k), 2.5, Color(c, k))
+			"projectile":
+				var to: Vector2 = f["to"]
+				var el := str(f.get("el", ""))
+				for i in 4:
+					var pp := p.lerp(to, maxf(0.0, k - 0.07 * i))
+					draw_circle(pp, 8.0 - i * 1.8, Color(c, 0.85 - 0.2 * i))
+				var cur := p.lerp(to, k)
+				match el:
+					"fire":
+						draw_circle(cur, 9.0, Color(1.0, 0.55, 0.15))
+						draw_circle(cur, 5.0, Color(1.0, 0.95, 0.5))
+					"water":
+						var dir := (to - p).normalized()
+						draw_colored_polygon(PackedVector2Array([cur + dir * 12.0, cur + dir.orthogonal() * 6.0, cur - dir * 6.0, cur - dir.orthogonal() * 6.0]), Color(0.6, 0.85, 1.0))
+					"grass":
+						var r := time * 12.0
+						draw_colored_polygon(PackedVector2Array([cur + Vector2(cos(r), sin(r)) * 10.0, cur + Vector2(cos(r + 1.57), sin(r + 1.57)) * 4.0,
+							cur + Vector2(cos(r + 3.14), sin(r + 3.14)) * 10.0, cur + Vector2(cos(r + 4.71), sin(r + 4.71)) * 4.0]), Color(0.5, 0.95, 0.4))
+					"wind":
+						var ang := (to - p).angle()
+						draw_arc(cur, 11.0, ang - 1.4, ang + 1.4, 12, Color(0.95, 1.0, 1.0), 4.0)
+					_:
+						draw_circle(cur, 8.0, Color(1, 1, 1))
+			"burst":
+				draw_circle(p, 22.0 * (1.0 - k), Color(1, 1, 1, 0.6 * (1.0 - k)))
+				draw_arc(p, 10.0 + 42.0 * k, 0.0, TAU, 32, Color(c, 1.0 - k), 4.0)
+				for i in 8:
+					var a := i * TAU / 8.0 + 0.3
+					draw_circle(p + Vector2(cos(a), sin(a)) * (8.0 + 36.0 * k), 4.0 * (1.0 - k) + 1.0, Color(c, 1.0 - k))
+			"heal":
+				for i in 6:
+					var a := i * TAU / 6.0
+					var pp := p + Vector2(cos(a) * 22.0, sin(a) * 8.0 - 44.0 * k)
+					draw_line(pp + Vector2(-4, 0), pp + Vector2(4, 0), Color(c, 1.0 - k), 2.5)
+					draw_line(pp + Vector2(0, -4), pp + Vector2(0, 4), Color(c, 1.0 - k), 2.5)
+				draw_arc(p, 30.0, 0.0, TAU, 32, Color(c, 0.6 * (1.0 - k)), 3.0)
+			"buff", "debuff":
+				var up := str(f["kind"]) == "buff"
+				for i in 3:
+					var x := -18.0 + 18.0 * i
+					var y := (-10.0 - 34.0 * k) if up else (-44.0 + 34.0 * k)
+					_draw_text("▲" if up else "▼", p + Vector2(x, y), 20, Color(c, 1.0 - k))
+			"summon":
+				var r := 38.0 * minf(1.0, k * 2.5)
+				var ring := _ellipse(p + Vector2(0, 20), r, r * 0.4, true)
+				draw_polyline(ring, Color(c, 1.0 - k * 0.7), 3.0)
+				var star := PackedVector2Array()
+				for i in 7:
+					var a := (i * 2) * TAU / 6.0 + time * 2.0
+					star.append(p + Vector2(0, 20) + Vector2(cos(a) * r, sin(a) * r * 0.4))
+				draw_polyline(star, Color(c, 0.8 * (1.0 - k)), 2.0)
+				var w := 26.0 * (1.0 - k)
+				draw_rect(Rect2(p.x - w * 0.5, p.y - 70.0, w, 90.0), Color(c, 0.45 * (1.0 - k)))
+				for i in 6:
+					draw_circle(p + Vector2(-20.0 + 8.0 * i, 10.0 - 70.0 * fmod(k + i * 0.17, 1.0)), 2.5, Color(1, 1, 1, 1.0 - k))
+			"vanish":
+				for i in 12:
+					var x := (i - 6) * 5.0 + sin(i * 1.7) * 4.0
+					var y := -60.0 * k * (0.6 + 0.1 * (i % 4)) - 6.0
+					draw_circle(p + Vector2(x, y), 3.5 * (1.0 - k) + 0.5, Color(c, 1.0 - k))
+			"capture":
+				draw_arc(p, 50.0 * (1.0 - k) + 8.0, 0.0, TAU, 32, Color(c, 1.0 - k * 0.5), 3.0)
+				for i in 6:
+					var a := i * TAU / 6.0 + k * 5.0
+					draw_circle(p + Vector2(cos(a), sin(a)) * 40.0 * (1.0 - k), 3.0, Color(1, 1, 1, 1.0 - k))
+			"thread":
+				var to2: Vector2 = f["to"]
+				var pts := PackedVector2Array()
+				var n := 16
+				for i in n + 1:
+					var q := float(i) / n
+					if q > k * 1.6:
+						break
+					var nrm := (to2 - p).normalized().orthogonal()
+					pts.append(p.lerp(to2, q) + nrm * sin(q * 12.0 + time * 10.0) * 5.0)
+				if pts.size() >= 2:
+					draw_polyline(pts, Color(c, 1.0 - k * 0.6), 3.0)
 
 
 func _ellipse(c: Vector2, rx: float, ry: float, closed: bool = false) -> PackedVector2Array:
@@ -1862,6 +2118,7 @@ func _rebuild_ui() -> void:
 		"select":
 			_add_action("턴 종료", _on_end_phase)
 			_add_action("후퇴", _on_retreat)
+			_add_action("속도 ×%d" % battle_speed, _toggle_speed)
 			hint_label.text = "행동할 아군을 고르세요. (초록 점 = 행동 가능, 순서 자유)\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위"
 		"player":
 			if active.is_summoner:

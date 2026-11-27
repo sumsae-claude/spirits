@@ -81,6 +81,19 @@ func sprite_for(s: Spirit) -> Texture2D:
 	return tex
 
 
+## 초상화: assets/portraits/<종족>.png(2D 일러스트)가 있으면 그것, 없으면 도트 스프라이트
+func portrait_for(s: Spirit) -> Texture2D:
+	if not (s is Summoner):
+		var path := "res://assets/portraits/%s.png" % s.species_id
+		if ResourceLoader.exists(path):
+			return load(path)
+	return sprite_for(s)
+
+
+func has_illustration(s: Spirit) -> bool:
+	return not (s is Summoner) and ResourceLoader.exists("res://assets/portraits/%s.png" % s.species_id)
+
+
 func element_multiplier(attack_element: String, defend_element: String) -> float:
 	if STRONG_AGAINST.get(attack_element, "") == defend_element:
 		return STRONG_MULT

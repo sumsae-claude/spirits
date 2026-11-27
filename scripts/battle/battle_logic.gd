@@ -6,6 +6,8 @@ const BASIC_ATTACK_POWER := 40
 const BASIC_ATTACK_RANGE := 1
 ## 디스펠 사거리/MP는 data/summoner.json (정령사 전용)
 const MP_REGEN_PER_ROUND := 2
+## 일반 공격(근접)을 받고 살아남으면 이 비율의 위력으로 반격. 스킬·원거리에는 반격 없음.
+const COUNTER_RATIO := 0.6
 ## 다른 정령사와 계약된 정령은 디스펠하기 어렵다
 const OWNED_DISPEL_MULT := 0.6
 

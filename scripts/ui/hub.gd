@@ -146,6 +146,16 @@ func _on_title() -> void:
 func _build_detail(vb: VBoxContainer) -> void:
 	var s := selected
 	var is_summoner := s is Summoner
+	var tex := GameData.portrait_for(s)
+	if tex != null:
+		var pic := TextureRect.new()
+		pic.texture = tex
+		pic.custom_minimum_size = Vector2(0, 240)
+		pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if not GameData.has_illustration(s):
+			pic.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST  # 도트는 또렷하게
+		vb.add_child(pic)
 	var el_color := GameData.element_color(s.element()).lightened(0.3)
 	vb.add_child(UIKit.label(s.display_name(), 44, el_color))
 	vb.add_child(UIKit.label("Lv.%d · %s 속성 · EXP %d/%d" % [

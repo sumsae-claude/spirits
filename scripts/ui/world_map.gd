@@ -3,8 +3,9 @@ extends Control
 ## 대화(프롤로그 / 스테이지 전후 / 체험판 끝)도 여기서 띄운다.
 
 const MAP_TOP := 130.0
-const PANEL_HEIGHT := 400.0
+const PANEL_HEIGHT := 470.0
 const NODE_RADIUS := 34.0
+const ICON_SIZE := 72.0
 
 var stages: Array = []
 var selected := 0
@@ -196,6 +197,7 @@ func _rebuild_panel() -> void:
 	panel_box.add_child(UIKit.label("%s · 권장 Lv.%d · 파티 평균 Lv.%d" % [
 		status, int(st.get("rec_level", 1)), GameState.average_party_level()], 21, UIKit.MUTED))
 	panel_box.add_child(UIKit.label(GameState.fill_text(str(st.get("desc", ""))), 23))
+	panel_box.add_child(_enemy_icons(st))
 	panel_box.add_child(UIKit.label("적: " + GameState.describe_stage_enemies(st), 21, Color(1.0, 0.7, 0.6)))
 	var rewards := PackedStringArray()
 	for item in st.get("rewards", {}).get("items", []):
@@ -209,6 +211,43 @@ func _rebuild_panel() -> void:
 	row.add_child(UIKit.button("출발" if not cleared else "다시 도전", _on_start, not unlocked or _busy))
 	row.add_child(UIKit.button("거점으로", _on_hub, _busy))
 	panel_box.add_child(row)
+
+
+## 등장하는 적의 초상화를 작은 카드로 나열 (보스·정령사는 금테, 무작위 정령은 "?")
+func _enemy_icons(st: Dictionary) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var seen := {}
+	for info in GameState.stage_preview(st):
+		var key := str(info["key"])
+		var boss := bool(info["boss"])
+		if seen.has(key) and not boss:
+			continue  # 같은 정령은 한 번만
+		seen[key] = true
+		var card := PanelContainer.new()
+		card.custom_minimum_size = Vector2(ICON_SIZE, ICON_SIZE)
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color(0.17, 0.19, 0.27)
+		style.border_color = UIKit.GOLD if boss else Color(0.38, 0.42, 0.55)
+		style.set_border_width_all(3 if boss else 2)
+		style.set_corner_radius_all(10)
+		card.add_theme_stylebox_override("panel", style)
+		var tex := GameData.portrait_by_key(key)
+		if tex != null:
+			var pic := TextureRect.new()
+			pic.texture = tex
+			pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			pic.flip_h = true  # 적은 왼쪽(주인공 쪽)을 바라보게
+			card.add_child(pic)
+		else:
+			var q := UIKit.label("?", 34, UIKit.MUTED, true)
+			q.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			card.add_child(q)
+		row.add_child(card)
+		if row.get_child_count() >= 7:
+			break
+	return row
 
 
 func _on_start() -> void:

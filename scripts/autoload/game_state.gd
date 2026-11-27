@@ -301,6 +301,22 @@ func fill_text(text: String) -> String:
 		.replace("{guardian}", guardian_name)
 
 
+## 대화 화자(치환 전 원문: "{player}", "{rival}", "{guardian}", "촌장" …)의 초상화 키.
+## 초상화가 없으면 "" → 대화창은 이름만 표시한다.
+func speaker_portrait_key(raw_speaker: String) -> String:
+	match raw_speaker:
+		"":
+			return ""
+		"{player}":
+			return "summoner_%s" % home_element()
+		"{rival}":
+			return "summoner_%s" % rival_element()
+		"{guardian}":
+			return str(GUARDIANS.get(home_element(), ""))
+	var table: Dictionary = GameData.chapter1.get("speaker_portraits", {})
+	return str(table.get(raw_speaker, ""))
+
+
 func home_region_name() -> String:
 	return fill_text("{home}")
 
@@ -356,6 +372,26 @@ func describe_stage_enemies(stage: Dictionary) -> String:
 	if wild > 0:
 		parts.append("야생 정령 %d" % wild)
 	return " · ".join(parts)
+
+
+## 월드맵 미리보기용 적 초상화 목록: [{"key": 초상화 키 ("" = 무작위 정령), "boss": bool}]
+## 수호 정령 → 적 정령사 → 정령사의 정령 → 야생 정령 순. 무작위(@any)는 key ""로 둔다.
+func stage_preview(stage: Dictionary) -> Array:
+	var out := []
+	if stage.has("guardian"):
+		out.append({"key": resolve_species(str(stage["guardian"]["species"])), "boss": true})
+	var sm = stage.get("summoner", null)
+	if typeof(sm) == TYPE_DICTIONARY:
+		out.append({"key": "summoner_%s" % resolve_element(str(sm["element"])), "boss": true})
+		for e in sm["party"]:
+			out.append({"key": _preview_species(str(e["species"])), "boss": false})
+	for e in stage.get("enemies", []):
+		out.append({"key": _preview_species(str(e["species"])), "boss": false})
+	return out
+
+
+func _preview_species(token: String) -> String:
+	return "" if token == "@any" else resolve_species(token)
 
 
 ## 스테이지 전투 시작: 적 구성을 만들어 전투 씬으로

@@ -14,6 +14,7 @@
 		"grass": "바람의 고원 마을",
 		"water": "불꽃 골짜기"
 	},
+	"speaker_portraits": {"촌장": "npc_elder", "결사 정찰병 그레이": "npc_grey"},
 	"stages": [
 		{
 			"id": "1-1", "name": "마을 어귀", "map_pos": [0.5, 0.9], "rec_level": 2,

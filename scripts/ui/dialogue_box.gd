@@ -10,7 +10,14 @@ var lines: Array = []
 var index := 0
 var speaker_label: Label
 var text_label: Label
+var portrait: TextureRect
+var _portrait_key := ""
+var _portrait_tween: Tween
 var _done := false
+
+const PANEL_TOP := -400.0       # 대화 패널 윗변 (화면 아래 기준)
+const PORTRAIT_SIZE := 300.0
+const PORTRAIT_SINK := 46.0     # 초상화 아랫부분이 패널 뒤로 살짝 가려지는 정도
 
 
 ## data/chapter1.json의 dialogues[key]를 parent 위에 띄운다. 대화가 없으면 null.
@@ -35,11 +42,19 @@ func _ready() -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dim)
 
+	# 화자 초상화: 패널보다 먼저 추가해서 아랫부분이 패널 뒤로 가려지게 한다
+	portrait = TextureRect.new()
+	portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	portrait.visible = false
+	add_child(portrait)
+
 	var panel := PanelContainer.new()
 	panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	panel.offset_left = 18
 	panel.offset_right = -18
-	panel.offset_top = -400
+	panel.offset_top = PANEL_TOP
 	panel.offset_bottom = -36
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var style := StyleBoxFlat.new()
@@ -99,13 +114,49 @@ func _show_line() -> void:
 		_finish.call_deferred()
 		return
 	var line: Dictionary = lines[index]
-	var speaker := GameState.fill_text(str(line.get("s", "")))
+	var raw_speaker := str(line.get("s", ""))
+	_update_portrait(raw_speaker)
+	var speaker := GameState.fill_text(raw_speaker)
 	speaker_label.text = speaker
 	speaker_label.visible = speaker != ""
 	var text := GameState.fill_text(str(line.get("t", "")))
 	text_label.text = text
 	# 나레이션/튜토리얼(▶)은 색을 다르게
 	text_label.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0) if speaker == "" else Color.WHITE)
+
+
+## 주인공은 왼쪽, 그 밖의 인물은 오른쪽(좌우 반전)에 세운다. 같은 화자가 이어지면 그대로 둔다.
+func _update_portrait(raw_speaker: String) -> void:
+	var key := GameState.speaker_portrait_key(raw_speaker)
+	if key == _portrait_key:
+		return
+	_portrait_key = key
+	if _portrait_tween != null and _portrait_tween.is_valid():
+		_portrait_tween.kill()
+	var tex := GameData.portrait_by_key(key)
+	if tex == null:
+		portrait.visible = false
+		return
+	var on_left := raw_speaker == "{player}"
+	portrait.texture = tex
+	portrait.flip_h = not on_left
+	var ax := 0.0 if on_left else 1.0
+	portrait.anchor_left = ax
+	portrait.anchor_right = ax
+	portrait.anchor_top = 1.0
+	portrait.anchor_bottom = 1.0
+	var x0 := 24.0 if on_left else -24.0 - PORTRAIT_SIZE
+	var slide := -40.0 if on_left else 40.0   # 옆에서 살짝 미끄러지며 나타남
+	portrait.offset_left = x0 + slide
+	portrait.offset_right = x0 + slide + PORTRAIT_SIZE
+	portrait.offset_bottom = PANEL_TOP + PORTRAIT_SINK
+	portrait.offset_top = PANEL_TOP + PORTRAIT_SINK - PORTRAIT_SIZE
+	portrait.modulate.a = 0.0
+	portrait.visible = true
+	_portrait_tween = create_tween().set_parallel(true)
+	_portrait_tween.tween_property(portrait, "offset_left", x0, 0.18).set_ease(Tween.EASE_OUT)
+	_portrait_tween.tween_property(portrait, "offset_right", x0 + PORTRAIT_SIZE, 0.18).set_ease(Tween.EASE_OUT)
+	_portrait_tween.tween_property(portrait, "modulate:a", 1.0, 0.18)
 
 
 func _finish() -> void:

@@ -50,6 +50,11 @@ var round_num := 0
 var summoner_unit: BattleUnit = null
 var enemy_summoner_unit: BattleUnit = null  # 정령사 대결일 때만
 var enemy_bench: Array = []                 # 적 정령사가 아직 소환하지 않은 정령
+var stage: Dictionary = {}                  # 스토리 스테이지 전투일 때 {"id", "name", "guardian"}
+var guardian_unit: BattleUnit = null        # 수호 정령 보스
+const GUARDIAN_CELL := Vector2i(4, 0)
+const GUARDIAN_REVEAL_RATIO := 0.3
+const GUARDIAN_DISPEL_BONUS := 0.3
 var active: BattleUnit = null
 var inspected: BattleUnit = null
 var inspected_cell := Vector2i(-1, -1)  # 유닛 없는 칸을 눌렀을 때 지형 정보 표시용
@@ -125,10 +130,15 @@ func _setup_units() -> void:
 		GameState.summoner = Summoner.create_summoner(GameState.DEFAULT_NAME, "fire", 5)
 	if GameState.party.is_empty():
 		GameState.party = [Spirit.create("emberbean", 5), Spirit.create("dewdrop", 4)]
-	if GameState.current_encounter.is_empty() and GameState.current_rival.is_empty():
+	stage = GameState.current_stage
+	GameState.current_stage = {}
+	if stage.is_empty() and GameState.current_encounter.is_empty() and GameState.current_rival.is_empty():
 		GameState.current_encounter = GameState.make_encounter()
 
+	if not stage.is_empty():
+		rng.seed = hash("stage_" + str(stage["id"]))  # 스테이지마다 같은 맵
 	_generate_terrain()
+	rng.randomize()
 	summoner_unit = _add_unit(GameState.summoner, 0, SUMMONER_CELL)
 	summoner_unit.is_summoner = true
 	var bench := _summonable()
@@ -139,8 +149,16 @@ func _setup_units() -> void:
 		_setup_rival(GameState.current_rival)
 	else:
 		for i in GameState.current_encounter.size():
-			_add_unit(GameState.current_encounter[i], 1, Vector2i(ENEMY_SPAWN_COLS[i], 1))
-		_log("야생 정령 %d마리가 나타났다!" % GameState.current_encounter.size())
+			_add_unit(GameState.current_encounter[i], 1, Vector2i(ENEMY_SPAWN_COLS[i % ENEMY_SPAWN_COLS.size()], 1))
+		if not GameState.current_encounter.is_empty():
+			_log("야생 정령 %d마리가 나타났다!" % GameState.current_encounter.size())
+	if not stage.is_empty() and stage.get("guardian") != null:
+		guardian_unit = _add_unit(stage["guardian"], 1, GUARDIAN_CELL)
+		guardian_unit.is_guardian = true
+		_log("수호 정령 %s이(가) 폭주하고 있다! HP를 %d%% 이하로 줄여 실을 드러내자." % [
+			guardian_unit.spirit.display_name(), int(GUARDIAN_REVEAL_RATIO * 100)])
+	if not stage.is_empty():
+		_log("[%s] %s" % [stage["id"], stage["name"]])
 	GameState.current_encounter = []
 	GameState.current_rival = {}
 
@@ -481,9 +499,11 @@ func _finish(victory: bool) -> void:
 			GameState.inventory.append(eid)
 			lines.append("장비 획득: %s" % GameData.equipment_desc(eid))
 		GameState.battles_won += 1
+		if not stage.is_empty():
+			lines.append_array(GameState.complete_stage(str(stage["id"])))
 	else:
 		lines.append("%s이(가) 쓰러졌다..." % GameState.summoner.display_name())
-		lines.append("정령들과 함께 거점으로 돌아가 회복합니다.")
+		lines.append("정령들과 함께 돌아가 회복합니다." + (" 월드맵에서 다시 도전할 수 있어요." if not stage.is_empty() else ""))
 	lines.append_array(_keep_captured())
 	GameState.heal_all()
 	GameState.save_game()
@@ -869,7 +889,7 @@ func _on_retreat() -> void:
 		GameState.hub_message = "전투에서 후퇴했습니다."
 	else:
 		GameState.hub_message = "후퇴했습니다. " + " / ".join(PackedStringArray(lines))
-	get_tree().change_scene_to_file("res://scenes/hub.tscn")
+	get_tree().change_scene_to_file(_exit_scene())
 
 
 # ---------------------------------------------------------------- 대상을 눌러 행동 고르기
@@ -932,7 +952,9 @@ func _target_options(u: BattleUnit, t: BattleUnit) -> Array:
 
 func _make_option(u: BattleUnit, t: BattleUnit, action: Dictionary, name_text: String, mp_cost: int) -> Dictionary:
 	var reason := ""
-	if u.spirit.mp < mp_cost:
+	if str(action.get("type", "")) == "dispel" and t.is_guardian and not t.revealed:
+		reason = "HP %d%% 이하에서 가능" % int(GUARDIAN_REVEAL_RATIO * 100)
+	elif u.spirit.mp < mp_cost:
 		reason = "MP 부족"
 	elif not _targets_for(u, u.cell, action).has(t.cell):
 		reason = "사거리 밖"
@@ -1042,6 +1064,8 @@ func _targets_for(u: BattleUnit, from_cell: Vector2i, action: Dictionary) -> Dic
 			continue
 		if kind == "dispel" and other.is_summoner:
 			continue  # 정령사는 디스펠할 수 없다
+		if kind == "dispel" and other.is_guardian and not other.revealed:
+			continue  # 수호 정령은 실이 드러나야 디스펠 가능
 		var d := grid.distance(from_cell, other.cell)
 		if d >= rmin and d <= rmax:
 			result[other.cell] = other
@@ -1165,9 +1189,15 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 	_effect(str(dmg), target.draw_pos, color)
 	if target.spirit.hp <= 0:
 		_knock_out(target)
+	_check_guardian_reveal(target)
 
 
 func _knock_out(target: BattleUnit) -> void:
+	if target.is_guardian:
+		# 수호 정령은 쓰러지지 않는다 — 디스펠로 구해야 한다
+		target.spirit.hp = 1
+		_check_guardian_reveal(target)
+		return
 	target.alive = false
 	_log("%s이(가) 쓰러졌다!" % target.spirit.display_name())
 	if target.team != 1:
@@ -1187,14 +1217,39 @@ func _knock_out(target: BattleUnit) -> void:
 		_log("주인을 잃은 정령 %d마리가 흩어졌다." % fled)
 
 
+func _dispel_chance(u: BattleUnit, t: BattleUnit) -> float:
+	var chance := BattleLogic.dispel_chance(u.spirit, t.spirit, t.owned)
+	if t.is_guardian:
+		chance = minf(0.95, chance + GUARDIAN_DISPEL_BONUS)
+	return chance
+
+
+## 수호 정령: HP가 일정 이하로 내려가면 실이 드러난다
+func _check_guardian_reveal(t: BattleUnit) -> void:
+	if not t.is_guardian or t.revealed:
+		return
+	if float(t.spirit.hp) <= float(t.spirit.max_hp()) * GUARDIAN_REVEAL_RATIO:
+		t.revealed = true
+		_log("%s의 엉킨 실이 드러났다! 지금 디스펠하면 구할 수 있다!" % t.spirit.display_name())
+		_effect("실이 드러났다!", t.draw_pos + Vector2(0, -20), Color(1.0, 0.9, 0.5))
+
+
 func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
-	var chance := BattleLogic.dispel_chance(u.spirit, target.spirit, target.owned)
+	var chance := _dispel_chance(u, target)
 	var pct := int(round(chance * 100.0))
 	_log("%s이(가) 디스펠을 시도했다... (성공률 %d%%)" % [u.spirit.display_name(), pct])
 	if rng.randf() < chance:
 		target.captured = true
 		captured.append(target.spirit)
-		if target.owned:
+		if target.is_guardian:
+			_log("디스펠 성공! %s의 실이 풀려 정신을 되찾았다!" % target.spirit.display_name())
+			for o in units:
+				var other: BattleUnit = o
+				if other.team == 1 and other.is_active():
+					other.recalled = true
+					_effect("물러남", other.draw_pos, COLOR_OWNED_RING)
+			_log("수호 정령이 진정되자 남은 정령들도 물러났다.")
+		elif target.owned:
 			_log("디스펠 성공! %s을(를) 적 정령사에게서 빼앗아 계약했다!" % target.spirit.display_name())
 		else:
 			_log("디스펠 성공! %s과(와) 계약했다!" % target.spirit.display_name())
@@ -1570,6 +1625,15 @@ func _draw_unit(u: BattleUnit) -> void:
 			draw_circle(p, 31.0, Color(0, 0, 0, 0.45))  # 이번 턴 행동 끝
 		elif u != active:
 			draw_circle(p + Vector2(24, -24), 6.0, Color(0.45, 1.0, 0.55))  # 행동 가능
+	if u.is_guardian:
+		var gp := 0.5 + 0.5 * sin(time * 3.0)
+		draw_arc(p, 36.0, 0.0, TAU, 48, Color(1.0, 0.85, 0.35, 0.6 + 0.4 * gp), 3.0)
+		# 엉킨 회색 실 / 드러난 금빛 실
+		var thread_col := Color(1.0, 0.9, 0.5, 0.9) if u.revealed else Color(0.6, 0.6, 0.65, 0.8)
+		for k in 3:
+			var a0 := time * 1.5 + k * TAU / 3.0
+			draw_arc(p, 24.0 + k * 3.0, a0, a0 + 2.2, 12, thread_col, 2.0)
+		_draw_text("수호", p + Vector2(0, -40), 15, Color(1.0, 0.85, 0.35))
 	_draw_buff_marks(u, p)
 	_draw_text(u.spirit.display_name(), p + Vector2(0, 2), 16, Color.WHITE)
 	_draw_text("Lv%d" % u.spirit.level, p + Vector2(0, 20), 14, Color(1, 1, 1, 0.85))
@@ -1648,7 +1712,7 @@ func _preview_text(t: BattleUnit) -> String:
 func _preview_for(u: BattleUnit, action: Dictionary, t: BattleUnit) -> String:
 	match str(action.get("type", "")):
 		"dispel":
-			return "%d%%" % int(round(BattleLogic.dispel_chance(u.spirit, t.spirit, t.owned) * 100.0))
+			return "%d%%" % int(round(_dispel_chance(u, t) * 100.0))
 		"skill":
 			var sk: Dictionary = GameData.skills[action["skill_id"]]
 			return "-%d" % _damage(u, u.cell, t, int(sk["power"]), str(sk["element"]), false)
@@ -1911,6 +1975,8 @@ func _unit_tag(u: BattleUnit) -> String:
 		return "정령사" if u.is_summoner else "아군"
 	if u.is_summoner:
 		return "적 정령사"
+	if u.is_guardian:
+		return "수호 정령 (실 드러남)" if u.revealed else "수호 정령"
 	return "적 정령" if u.owned else "야생"
 
 
@@ -1946,8 +2012,13 @@ func _show_result(victory: bool, lines: Array[String]) -> void:
 	var list := UIKit.scroll_list(vb)
 	for line in lines:
 		list.add_child(UIKit.label(line, 26, Color.WHITE, true))
-	vb.add_child(UIKit.button("거점으로", _return_to_hub))
+	vb.add_child(UIKit.button("월드맵으로" if not stage.is_empty() else "거점으로", _return_to_hub))
+
+
+## 스토리 전투면 월드맵, 아니면 거점으로 돌아간다.
+func _exit_scene() -> String:
+	return "res://scenes/world_map.tscn" if not stage.is_empty() else "res://scenes/hub.tscn"
 
 
 func _return_to_hub() -> void:
-	get_tree().change_scene_to_file("res://scenes/hub.tscn")
+	get_tree().change_scene_to_file(_exit_scene())

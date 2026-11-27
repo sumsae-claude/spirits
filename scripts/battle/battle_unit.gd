@@ -11,6 +11,8 @@ var captured := false
 var recalled := false      # 정령사 곁으로 귀환함 (전장에서 빠짐)
 var is_summoner := false
 var owned := false         # 적 정령사가 소환한 정령 (주인이 있음)
+var is_guardian := false   # 스토리 보스 수호 정령
+var revealed := false      # 수호 정령의 실이 드러남 (디스펠 가능)
 var joined_round := 0      # 전장에 나온 라운드 (그 라운드에는 행동하지 않음)
 var done := false          # 이번 진영 턴에 행동을 마침
 ## 버프/디버프: [{"name", "stat", "mult", "add", "rounds"}]

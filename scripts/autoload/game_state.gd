@@ -9,6 +9,14 @@ const MAX_PARTY := 6
 const STARTERS := {"wind": "breezebird", "fire": "emberbean", "grass": "pebble", "water": "dewdrop"}
 const STARTER_LEVEL := 3
 const DEFAULT_NAME := "리안"
+## 속성별 진화 전 정령 계열 [첫 정령 계열, 두 번째 계열]
+const FAMILIES := {
+	"wind": ["breezebird", "whirlmouse"], "fire": ["emberbean", "ashfox"],
+	"grass": ["pebble", "mossturtle"], "water": ["dewdrop", "mistwhale"],
+}
+## 상성 중립 속성 (라이벌 속성)
+const NEUTRAL_OF := {"wind": "grass", "grass": "wind", "fire": "water", "water": "fire"}
+const GUARDIANS := {"wind": "guardian_wind", "fire": "guardian_fire", "grass": "guardian_grass", "water": "guardian_water"}
 const RIVAL_NAMES := ["카렌", "도윤", "세라", "모로", "이안", "루카", "하린", "벨"]
 
 var summoner: Summoner = null
@@ -18,7 +26,12 @@ var inventory: Array = []  # 장착하지 않은 장비 id
 var battles_won: int = 0
 var current_encounter: Array = []  # 다음 전투에 나올 야생 정령 (Spirit)
 var current_rival: Dictionary = {}
-var hub_message := ""  # 거점 화면에 한 번 보여줄 알림 (후퇴 결과 등)  # 다음 전투의 적 정령사 {"summoner": Summoner, "party": [Spirit]}
+var hub_message := ""  # 거점 화면에 한 번 보여줄 알림 (후퇴 결과 등)
+## 스토리 진행
+var cleared_stages: Array = []      # 클리어한 스테이지 id
+var flags: Dictionary = {}          # 프롤로그 봤음 등
+var current_stage: Dictionary = {}  # 다음 전투가 스토리 스테이지면 그 정보
+var pending_dialogue := ""          # 월드맵으로 돌아왔을 때 보여줄 대화 키  # 다음 전투의 적 정령사 {"summoner": Summoner, "party": [Spirit]}
 
 
 func new_game(p_name: String, element: String) -> void:
@@ -31,6 +44,10 @@ func new_game(p_name: String, element: String) -> void:
 	inventory = ["wood_wand", "leaf_charm", "conductor_staff", "sage_robe"]
 	battles_won = 0
 	current_encounter = []
+	cleared_stages = []
+	flags = {}
+	current_stage = {}
+	pending_dialogue = ""
 	save_game()
 
 
@@ -46,6 +63,8 @@ func save_game() -> void:
 		"storage": storage.map(func(s): return s.to_dict()),
 		"inventory": inventory,
 		"battles_won": battles_won,
+		"cleared_stages": cleared_stages,
+		"flags": flags,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -78,6 +97,15 @@ func load_game() -> bool:
 			if GameData.equipment.has(str(e)):
 				inventory.append(str(e))
 	battles_won = int(data.get("battles_won", 0))
+	cleared_stages = []
+	var cs = data.get("cleared_stages", [])
+	if typeof(cs) == TYPE_ARRAY:
+		for sid in cs:
+			cleared_stages.append(str(sid))
+	var fl = data.get("flags", {})
+	flags = fl if typeof(fl) == TYPE_DICTIONARY else {}
+	current_stage = {}
+	pending_dialogue = ""
 	current_encounter = []
 	if party.is_empty():
 		if storage.is_empty():
@@ -202,6 +230,7 @@ func make_rival() -> Dictionary:
 
 ## kind: "wild" = 야생 정령 무리, "rival" = 적 정령사와 대결
 func start_battle(kind: String = "wild") -> void:
+	current_stage = {}
 	current_encounter = []
 	current_rival = {}
 	if kind == "rival":
@@ -210,3 +239,163 @@ func start_battle(kind: String = "wild") -> void:
 		current_encounter = make_encounter()
 	heal_all()
 	get_tree().change_scene_to_file("res://scenes/battle.tscn")
+
+
+# ================================================================ 스토리 (챕터 1)
+
+func home_element() -> String:
+	return summoner.element_id if summoner != null else "fire"
+
+
+func rival_element() -> String:
+	return str(NEUTRAL_OF.get(home_element(), "water"))
+
+
+## 시작 속성에 강한 속성 (회색 결사가 쓰는 속성)
+func strong_element() -> String:
+	for el in GameData.STRONG_AGAINST:
+		if GameData.STRONG_AGAINST[el] == home_element():
+			return str(el)
+	return "wind"
+
+
+func chapter_stages() -> Array:
+	return GameData.chapter1.get("stages", [])
+
+
+func stage_index(stage_id: String) -> int:
+	var stages := chapter_stages()
+	for i in stages.size():
+		if str(stages[i]["id"]) == stage_id:
+			return i
+	return -1
+
+
+func is_cleared(stage_id: String) -> bool:
+	return cleared_stages.has(stage_id)
+
+
+func is_unlocked(index: int) -> bool:
+	if index <= 0:
+		return true
+	var stages := chapter_stages()
+	return index < stages.size() and is_cleared(str(stages[index - 1]["id"]))
+
+
+func chapter_complete() -> bool:
+	for st in chapter_stages():
+		if not is_cleared(str(st["id"])):
+			return false
+	return true
+
+
+## 대화·이름 속 {player} {rival} {home} {guardian} {next} 치환
+func fill_text(text: String) -> String:
+	var ch: Dictionary = GameData.chapter1
+	var guardian_id := str(GUARDIANS.get(home_element(), ""))
+	var guardian_name := str(GameData.species[guardian_id]["name"]) if GameData.species.has(guardian_id) else "수호 정령"
+	return text.replace("{player}", summoner.display_name() if summoner != null else DEFAULT_NAME) \
+		.replace("{rival}", str(ch.get("rival_name", "세라"))) \
+		.replace("{home}", str(ch.get("regions", {}).get(home_element(), "고향"))) \
+		.replace("{next}", str(ch.get("next_regions", {}).get(home_element(), "새로운"))) \
+		.replace("{guardian}", guardian_name)
+
+
+func home_region_name() -> String:
+	return fill_text("{home}")
+
+
+## "@home_a" 같은 표식을 실제 정령 id로 바꾼다.
+func resolve_species(token: String) -> String:
+	match token:
+		"@home_a":
+			return str(FAMILIES[home_element()][0])
+		"@home_b":
+			return str(FAMILIES[home_element()][1])
+		"@rival_a":
+			return str(FAMILIES[rival_element()][0])
+		"@rival_b":
+			return str(FAMILIES[rival_element()][1])
+		"@strong_a":
+			return str(FAMILIES[strong_element()][0])
+		"@strong_b":
+			return str(FAMILIES[strong_element()][1])
+		"@guardian":
+			return str(GUARDIANS[home_element()])
+		"@any":
+			var pool := GameData.wild_pool()
+			return str(pool[randi() % pool.size()])
+	return token
+
+
+func resolve_element(token: String) -> String:
+	match token:
+		"@home":
+			return home_element()
+		"@rival":
+			return rival_element()
+		"@strong":
+			return strong_element()
+	return token
+
+
+## 월드맵 미리보기용 적 구성 설명
+func describe_stage_enemies(stage: Dictionary) -> String:
+	var parts := PackedStringArray()
+	if stage.has("guardian"):
+		var gid := resolve_species(str(stage["guardian"]["species"]))
+		parts.append("수호 정령 %s Lv.%d" % [GameData.species[gid]["name"], int(stage["guardian"]["level"])])
+	var sm = stage.get("summoner", null)
+	if typeof(sm) == TYPE_DICTIONARY:
+		var nm := str(sm["name"])
+		nm = fill_text("{rival}") if nm == "@rival" else nm
+		parts.append("정령사 %s (%s) + 정령 %d" % [nm, GameData.element_name(resolve_element(str(sm["element"]))), (sm["party"] as Array).size()])
+	var wild := 0
+	for e in stage.get("enemies", []):
+		wild += 1
+	if wild > 0:
+		parts.append("야생 정령 %d" % wild)
+	return " · ".join(parts)
+
+
+## 스테이지 전투 시작: 적 구성을 만들어 전투 씬으로
+func start_stage(stage: Dictionary) -> void:
+	current_encounter = []
+	current_rival = {}
+	for e in stage.get("enemies", []):
+		current_encounter.append(Spirit.create(resolve_species(str(e["species"])), int(e["level"])))
+	var sm = stage.get("summoner", null)
+	if typeof(sm) == TYPE_DICTIONARY:
+		var nm := str(sm["name"])
+		if nm == "@rival":
+			nm = fill_text("{rival}")
+		var m := Summoner.create_summoner(nm, resolve_element(str(sm["element"])), int(sm["level"]))
+		var party_list := []
+		for e in sm["party"]:
+			party_list.append(Spirit.create(resolve_species(str(e["species"])), int(e["level"])))
+		current_rival = {"summoner": m, "party": party_list}
+	var guardian = null
+	if stage.has("guardian"):
+		guardian = Spirit.create(resolve_species(str(stage["guardian"]["species"])), int(stage["guardian"]["level"]))
+	current_stage = {"id": str(stage["id"]), "name": str(stage["name"]), "guardian": guardian}
+	heal_all()
+	get_tree().change_scene_to_file("res://scenes/battle.tscn")
+
+
+## 스테이지 클리어 처리. 첫 클리어면 보상. 보상 메시지 반환.
+func complete_stage(stage_id: String) -> Array[String]:
+	var lines: Array[String] = []
+	var idx := stage_index(stage_id)
+	if idx < 0:
+		return lines
+	var stage: Dictionary = chapter_stages()[idx]
+	if not is_cleared(stage_id):
+		cleared_stages.append(stage_id)
+		lines.append("스테이지 %s 첫 클리어!" % stage_id)
+		for item in stage.get("rewards", {}).get("items", []):
+			if GameData.equipment.has(str(item)):
+				inventory.append(str(item))
+				lines.append("클리어 보상: %s" % GameData.equipment_desc(str(item)))
+		pending_dialogue = str(stage.get("dialogue_post", ""))
+	save_game()
+	return lines

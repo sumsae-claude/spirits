@@ -129,5 +129,37 @@
 		"growth": {"hp": 5, "mp": 1.7, "atk": 2.7, "def": 1, "spd": 1.8},
 		"skills": [{"id": "gust", "level": 1}, {"id": "air_blade", "level": 6}, {"id": "tempest", "level": 15}],
 		"evolves_to": "", "evolve_level": 0
+	},
+	"guardian_wind": {
+		"name": "실피아", "element": "wind", "wild": false, "guardian": true, "catch": 1.0,
+		"desc": "바람의 고원을 지키는 수호 정령. 깃털 날개가 달린 작은 회오리.",
+		"base": {"hp": 64, "mp": 30, "atk": 15, "def": 11, "spd": 15, "mov": 4},
+		"growth": {"hp": 6, "mp": 2, "atk": 2.6, "def": 1.5, "spd": 1.6},
+		"skills": [{"id": "gust", "level": 1}, {"id": "air_blade", "level": 1}, {"id": "tempest", "level": 7}],
+		"evolves_to": "", "evolve_level": 0
+	},
+	"guardian_fire": {
+		"name": "화련", "element": "fire", "wild": false, "guardian": true, "catch": 1.0,
+		"desc": "불꽃 골짜기를 지키는 수호 정령. 연꽃 모양의 불꽃을 피우는 아기 사자.",
+		"base": {"hp": 66, "mp": 30, "atk": 16, "def": 11, "spd": 13, "mov": 3},
+		"growth": {"hp": 6.5, "mp": 2, "atk": 2.8, "def": 1.5, "spd": 1.3},
+		"skills": [{"id": "spark", "level": 1}, {"id": "flame_burst", "level": 1}, {"id": "inferno", "level": 7}],
+		"evolves_to": "", "evolve_level": 0
+	},
+	"guardian_grass": {
+		"name": "녹엽", "element": "grass", "wild": false, "guardian": true, "catch": 1.0,
+		"desc": "초록숲을 지키는 수호 정령. 뿔에 꽃이 피는 작은 사슴.",
+		"base": {"hp": 72, "mp": 28, "atk": 14, "def": 14, "spd": 11, "mov": 3},
+		"growth": {"hp": 7, "mp": 1.8, "atk": 2.4, "def": 2, "spd": 1.1},
+		"skills": [{"id": "pebble_shot", "level": 1}, {"id": "rock_slam", "level": 1}, {"id": "quake", "level": 7}],
+		"evolves_to": "", "evolve_level": 0
+	},
+	"guardian_water": {
+		"name": "수련", "element": "water", "wild": false, "guardian": true, "catch": 1.0,
+		"desc": "물안개 호수를 지키는 수호 정령. 물방울 왕관을 쓴 아기 고래.",
+		"base": {"hp": 70, "mp": 32, "atk": 14, "def": 13, "spd": 11, "mov": 3},
+		"growth": {"hp": 7, "mp": 2.2, "atk": 2.4, "def": 1.8, "spd": 1.1},
+		"skills": [{"id": "splash", "level": 1}, {"id": "water_lance", "level": 1}, {"id": "tidal_crash", "level": 7}],
+		"evolves_to": "", "evolve_level": 0
 	}
 }

@@ -20,7 +20,7 @@ func _show_title() -> void:
 		vb.add_child(UIKit.label(_message, 24, Color(1, 0.6, 0.5), true))
 	vb.add_child(UIKit.button("새 게임", _on_new_game))
 	vb.add_child(UIKit.button("이어하기", _on_continue, not GameState.has_save()))
-	vb.add_child(UIKit.label("프로토타입 v0.7", 20, UIKit.MUTED, true))
+	vb.add_child(UIKit.label("챕터 1 체험판 v0.8", 20, UIKit.MUTED, true))
 
 
 func _on_new_game() -> void:
@@ -29,7 +29,7 @@ func _on_new_game() -> void:
 
 func _on_continue() -> void:
 	if GameState.load_game():
-		get_tree().change_scene_to_file("res://scenes/hub.tscn")
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
 	else:
 		_message = "저장 데이터를 불러오지 못했습니다."
 		_show_title.call_deferred()
@@ -62,4 +62,4 @@ func _on_back() -> void:
 
 func _choose(element: String) -> void:
 	GameState.new_game(_name_edit.text if _name_edit != null else "", element)
-	get_tree().change_scene_to_file("res://scenes/hub.tscn")
+	get_tree().change_scene_to_file("res://scenes/world_map.tscn")

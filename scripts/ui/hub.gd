@@ -49,10 +49,14 @@ func _build_list(vb: VBoxContainer) -> void:
 	for s in GameState.storage:
 		list.add_child(_spirit_button(s))
 
+	var adv := UIKit.button("모험 — %s" % str(GameData.chapter1.get("title", "1장")), _on_adventure, false, 84)
+	adv.add_theme_font_size_override("font_size", 30)
+	adv.add_theme_color_override("font_color", UIKit.GOLD)
+	vb.add_child(adv)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
-	row.add_child(UIKit.button("야생 탐험", _on_explore))
-	row.add_child(UIKit.button("정령사 대결", _on_rival))
+	row.add_child(UIKit.button("사냥터 (야생)", _on_explore))
+	row.add_child(UIKit.button("연습 대결", _on_rival))
 	vb.add_child(row)
 	var row2 := HBoxContainer.new()
 	row2.add_theme_constant_override("separation", 12)
@@ -96,6 +100,11 @@ func _select(s: Spirit) -> void:
 	picking_slot = ""
 	message = ""
 	_refresh()
+
+
+func _on_adventure() -> void:
+	GameState.save_game()
+	get_tree().change_scene_to_file("res://scenes/world_map.tscn")
 
 
 func _on_explore() -> void:

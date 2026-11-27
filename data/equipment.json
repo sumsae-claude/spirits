@@ -1,0 +1,11 @@
+{
+	"wood_wand": {"name": "나무 지팡이", "slot": "weapon", "bonus": {"atk": 3}, "desc": "초보 정령사의 지팡이."},
+	"iron_claw": {"name": "강철 발톱", "slot": "weapon", "bonus": {"atk": 6}, "desc": "날카롭게 벼린 발톱."},
+	"crystal_rod": {"name": "수정 막대", "slot": "weapon", "bonus": {"atk": 4, "mp": 6}, "desc": "마력이 깃든 수정."},
+	"storm_feather": {"name": "폭풍 깃털", "slot": "weapon", "bonus": {"atk": 4, "spd": 3}, "desc": "바람을 머금은 깃털."},
+
+	"leaf_charm": {"name": "잎사귀 부적", "slot": "accessory", "bonus": {"hp": 10}, "desc": "생명력을 북돋는 부적."},
+	"stone_amulet": {"name": "돌 목걸이", "slot": "accessory", "bonus": {"def": 4}, "desc": "몸을 단단하게 해준다."},
+	"wind_boots": {"name": "바람 신발", "slot": "accessory", "bonus": {"mov": 1, "spd": 1}, "desc": "한 칸 더 멀리 움직인다."},
+	"mana_pearl": {"name": "마력 진주", "slot": "accessory", "bonus": {"mp": 8, "def": 1}, "desc": "마력이 샘솟는 진주."}
+}

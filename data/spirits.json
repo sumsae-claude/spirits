@@ -1,0 +1,133 @@
+{
+	"emberbean": {
+		"name": "불씨콩", "element": "fire", "wild": true, "catch": 1.0,
+		"desc": "콩알만 한 불씨 정령. 기분이 좋으면 머리 위 불꽃이 커진다.",
+		"base": {"hp": 30, "mp": 12, "atk": 11, "def": 7, "spd": 9, "mov": 3},
+		"growth": {"hp": 5, "mp": 1.5, "atk": 2, "def": 1.2, "spd": 1},
+		"skills": [{"id": "spark", "level": 1}, {"id": "flame_burst", "level": 5}],
+		"evolves_to": "blazebean", "evolve_level": 8
+	},
+	"blazebean": {
+		"name": "화염콩", "element": "fire", "wild": false, "catch": 0.7,
+		"desc": "불씨콩이 자라 온몸이 불꽃으로 타오르는 모습.",
+		"base": {"hp": 40, "mp": 16, "atk": 15, "def": 9, "spd": 11, "mov": 3},
+		"growth": {"hp": 6, "mp": 1.8, "atk": 2.6, "def": 1.5, "spd": 1.3},
+		"skills": [{"id": "spark", "level": 1}, {"id": "flame_burst", "level": 5}, {"id": "inferno", "level": 12}],
+		"evolves_to": "", "evolve_level": 0
+	},
+	"ashfox": {
+		"name": "잿불여우", "element": "fire", "wild": true, "catch": 1.0,
+		"desc": "꼬리 끝에 잿불을 단 날쌘 여우 정령.",
+		"base": {"hp": 26, "mp": 12, "atk": 12, "def": 5, "spd": 13, "mov": 4},
+		"growth": {"hp": 4, "mp": 1.5, "atk": 2.3, "def": 0.9, "spd": 1.5},
+		"skills": [{"id": "spark", "level": 1}, {"id": "flame_burst", "level": 6}],
+		"evolves_to": "crimsonfox", "evolve_level": 12
+	},
+	"crimsonfox": {
+		"name": "홍련여우", "element": "fire", "wild": false, "catch": 0.7,
+		"desc": "아홉 갈래 불꽃 꼬리를 가진 여우 정령.",
+		"base": {"hp": 36, "mp": 16, "atk": 17, "def": 7, "spd": 16, "mov": 4},
+		"growth": {"hp": 5, "mp": 1.8, "atk": 2.8, "def": 1.1, "spd": 1.7},
+		"skills": [{"id": "spark", "level": 1}, {"id": "flame_burst", "level": 6}, {"id": "inferno", "level": 15}],
+		"evolves_to": "", "evolve_level": 0
+	},
+
+	"dewdrop": {
+		"name": "물방울이", "element": "water", "wild": true, "catch": 1.0,
+		"desc": "아침 이슬에서 태어난 말랑한 정령.",
+		"base": {"hp": 32, "mp": 14, "atk": 10, "def": 8, "spd": 9, "mov": 3},
+		"growth": {"hp": 5, "mp": 1.8, "atk": 1.9, "def": 1.3, "spd": 1},
+		"skills": [{"id": "splash", "level": 1}, {"id": "water_lance", "level": 5}],
+		"evolves_to": "tidesprite", "evolve_level": 8
+	},
+	"tidesprite": {
+		"name": "파도정령", "element": "water", "wild": false, "catch": 0.7,
+		"desc": "파도를 타고 춤추는 물의 정령.",
+		"base": {"hp": 42, "mp": 19, "atk": 14, "def": 10, "spd": 11, "mov": 3},
+		"growth": {"hp": 6, "mp": 2.1, "atk": 2.4, "def": 1.6, "spd": 1.2},
+		"skills": [{"id": "splash", "level": 1}, {"id": "water_lance", "level": 5}, {"id": "tidal_crash", "level": 12}],
+		"evolves_to": "", "evolve_level": 0
+	},
+	"mistwhale": {
+		"name": "안개고래", "element": "water", "wild": true, "catch": 1.0,
+		"desc": "안개 속을 헤엄치는 작은 고래 정령. 느리지만 튼튼하다.",
+		"base": {"hp": 38, "mp": 16, "atk": 9, "def": 10, "spd": 6, "mov": 3},
+		"growth": {"hp": 6.5, "mp": 1.8, "atk": 1.7, "def": 1.6, "spd": 0.8},
+		"skills": [{"id": "splash", "level": 1}, {"id": "water_lance", "level": 6}],
+		"evolves_to": "abysswhale", "evolve_level": 12
+	},
+	"abysswhale": {
+		"name": "심해고래", "element": "water", "wild": false, "catch": 0.7,
+		"desc": "깊은 바다의 압력을 품은 거대한 고래 정령.",
+		"base": {"hp": 52, "mp": 20, "atk": 13, "def": 13, "spd": 7, "mov": 3},
+		"growth": {"hp": 7.5, "mp": 2.1, "atk": 2.1, "def": 2, "spd": 0.9},
+		"skills": [{"id": "splash", "level": 1}, {"id": "water_lance", "level": 6}, {"id": "tidal_crash", "level": 15}],
+		"evolves_to": "", "evolve_level": 0
+	},
+
+	"pebble": {
+		"name": "조약돌이", "element": "earth", "wild": true, "catch": 1.0,
+		"desc": "냇가의 조약돌에 깃든 단단한 정령.",
+		"base": {"hp": 34, "mp": 10, "atk": 11, "def": 10, "spd": 7, "mov": 3},
+		"growth": {"hp": 5.5, "mp": 1.2, "atk": 2, "def": 1.7, "spd": 0.8},
+		"skills": [{"id": "pebble_shot", "level": 1}, {"id": "rock_slam", "level": 5}],
+		"evolves_to": "boulder", "evolve_level": 8
+	},
+	"boulder": {
+		"name": "바위거인", "element": "earth", "wild": false, "catch": 0.7,
+		"desc": "커다란 바위로 몸을 쌓아 올린 정령.",
+		"base": {"hp": 46, "mp": 13, "atk": 15, "def": 14, "spd": 8, "mov": 3},
+		"growth": {"hp": 6.5, "mp": 1.4, "atk": 2.5, "def": 2.1, "spd": 0.9},
+		"skills": [{"id": "pebble_shot", "level": 1}, {"id": "rock_slam", "level": 5}, {"id": "quake", "level": 12}],
+		"evolves_to": "", "evolve_level": 0
+	},
+	"mossturtle": {
+		"name": "이끼거북", "element": "earth", "wild": true, "catch": 1.0,
+		"desc": "등에 이끼 정원을 키우는 느긋한 거북 정령.",
+		"base": {"hp": 40, "mp": 10, "atk": 8, "def": 13, "spd": 5, "mov": 2},
+		"growth": {"hp": 6.5, "mp": 1.2, "atk": 1.5, "def": 2.2, "spd": 0.6},
+		"skills": [{"id": "pebble_shot", "level": 1}, {"id": "rock_slam", "level": 6}],
+		"evolves_to": "oaktortoise", "evolve_level": 12
+	},
+	"oaktortoise": {
+		"name": "고목거북", "element": "earth", "wild": false, "catch": 0.7,
+		"desc": "등껍질에서 고목이 자라난 오래된 정령.",
+		"base": {"hp": 56, "mp": 13, "atk": 12, "def": 18, "spd": 6, "mov": 2},
+		"growth": {"hp": 8, "mp": 1.4, "atk": 1.9, "def": 2.6, "spd": 0.7},
+		"skills": [{"id": "pebble_shot", "level": 1}, {"id": "rock_slam", "level": 6}, {"id": "quake", "level": 15}],
+		"evolves_to": "", "evolve_level": 0
+	},
+
+	"breezebird": {
+		"name": "산들새", "element": "wind", "wild": true, "catch": 1.0,
+		"desc": "산들바람을 타고 다니는 작은 새 정령.",
+		"base": {"hp": 28, "mp": 12, "atk": 10, "def": 6, "spd": 12, "mov": 4},
+		"growth": {"hp": 4.5, "mp": 1.5, "atk": 1.9, "def": 1, "spd": 1.4},
+		"skills": [{"id": "gust", "level": 1}, {"id": "air_blade", "level": 5}],
+		"evolves_to": "stormhawk", "evolve_level": 8
+	},
+	"stormhawk": {
+		"name": "폭풍매", "element": "wind", "wild": false, "catch": 0.7,
+		"desc": "날갯짓 한 번에 돌풍을 일으키는 매 정령.",
+		"base": {"hp": 37, "mp": 16, "atk": 14, "def": 8, "spd": 15, "mov": 4},
+		"growth": {"hp": 5.5, "mp": 1.8, "atk": 2.5, "def": 1.2, "spd": 1.6},
+		"skills": [{"id": "gust", "level": 1}, {"id": "air_blade", "level": 5}, {"id": "tempest", "level": 12}],
+		"evolves_to": "", "evolve_level": 0
+	},
+	"whirlmouse": {
+		"name": "회오리쥐", "element": "wind", "wild": true, "catch": 1.0,
+		"desc": "작은 회오리를 일으키며 뛰어다니는 쥐 정령.",
+		"base": {"hp": 24, "mp": 11, "atk": 11, "def": 5, "spd": 14, "mov": 4},
+		"growth": {"hp": 4, "mp": 1.4, "atk": 2.1, "def": 0.8, "spd": 1.6},
+		"skills": [{"id": "gust", "level": 1}, {"id": "air_blade", "level": 6}],
+		"evolves_to": "galemouse", "evolve_level": 12
+	},
+	"galemouse": {
+		"name": "질풍쥐", "element": "wind", "wild": false, "catch": 0.7,
+		"desc": "눈에 보이지 않을 만큼 빠른 쥐 정령.",
+		"base": {"hp": 33, "mp": 15, "atk": 16, "def": 7, "spd": 18, "mov": 5},
+		"growth": {"hp": 5, "mp": 1.7, "atk": 2.7, "def": 1, "spd": 1.8},
+		"skills": [{"id": "gust", "level": 1}, {"id": "air_blade", "level": 6}, {"id": "tempest", "level": 15}],
+		"evolves_to": "", "evolve_level": 0
+	}
+}

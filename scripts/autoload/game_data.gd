@@ -22,6 +22,9 @@ var terrains: Dictionary = {}
 var summoner_data: Dictionary = {}
 var summoner_skills: Dictionary = {}
 var chapter1: Dictionary = {}
+## 챕터 목록 (chapter1, chapter2 …). 각 챕터에 "nodes"(지도 지점) 배열이 있다.
+## chapter1의 stages는 한 줄로 이어진 전투 지점으로 자동 변환한다.
+var chapters: Array = []
 
 var ui_font: Font
 var _sprite_cache: Dictionary = {}
@@ -36,7 +39,76 @@ func _ready() -> void:
 	summoner_data = _load_json("res://data/summoner.json")
 	summoner_skills = _load_json("res://data/summoner_skills.json")
 	chapter1 = _load_json("res://data/chapter1.json")
+	_setup_chapters()
 	_setup_theme()
+
+
+func _setup_chapters() -> void:
+	chapters = [chapter1]
+	var ch2 := _load_json("res://data/chapter2.json")
+	if not ch2.is_empty():
+		chapters.append(ch2)
+	# 1장: stages → nodes (일직선)
+	var nodes: Array = []
+	var stages: Array = chapter1.get("stages", [])
+	for i in stages.size():
+		var st: Dictionary = (stages[i] as Dictionary).duplicate()
+		st["type"] = "boss" if st.has("guardian") else "battle"
+		st["pos"] = st.get("map_pos", [0.5, 0.5])
+		st["links"] = [str(stages[i + 1]["id"])] if i + 1 < stages.size() else []
+		if i == stages.size() - 1:
+			st["goal"] = true
+		nodes.append(st)
+	chapter1["nodes"] = nodes
+
+
+## 모든 챕터에서 지점 찾기. {"node": Dictionary, "chapter": 번호}, 없으면 빈 딕셔너리.
+func find_node(node_id: String) -> Dictionary:
+	for ci in chapters.size():
+		for n in (chapters[ci] as Dictionary).get("nodes", []):
+			if str(n["id"]) == node_id:
+				return {"node": n, "chapter": ci}
+	return {}
+
+
+## 대화 (모든 챕터의 dialogues에서 찾음)
+func dialogue(key: String) -> Array:
+	for ch in chapters:
+		var all: Dictionary = (ch as Dictionary).get("dialogues", {})
+		if all.has(key):
+			return all[key]
+	return []
+
+
+## 전투 중 튜토리얼 (모든 챕터 합침)
+func tutorials_for(stage_id: String) -> Array:
+	var result: Array = []
+	for ch in chapters:
+		var all: Dictionary = (ch as Dictionary).get("tutorials", {})
+		result.append_array(all.get(stage_id, []))
+	result.append_array(chapter1.get("tutorials", {}).get("*", []))
+	return result
+
+
+func speaker_portrait_table() -> Dictionary:
+	var table := {}
+	for ch in chapters:
+		table.merge((ch as Dictionary).get("speaker_portraits", {}), true)
+	return table
+
+
+## 장비 가격 (equipment.json의 price, 없으면 능력치로 계산)
+func equipment_price(eid: String) -> int:
+	if not equipment.has(eid):
+		return 0
+	var e: Dictionary = equipment[eid]
+	if e.has("price"):
+		return int(e["price"])
+	var weights := {"hp": 4, "mp": 5, "atk": 16, "def": 15, "spd": 12, "mov": 70}
+	var total := 20
+	for k in e.get("bonus", {}):
+		total += int(weights.get(k, 10)) * int(e["bonus"][k])
+	return int(round(total / 10.0)) * 10
 
 
 func _load_json(path: String) -> Dictionary:

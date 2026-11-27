@@ -1,0 +1,80 @@
+{
+	"id": "ch2",
+	"title": "2장 · 안개 너머의 길",
+	"region": "next",
+	"intro": "ch2_intro",
+	"end": "ch2_end",
+	"speaker_portraits": {"결사 간부 바렌": "npc_grey", "수련 정령사 하린": "@summoner_reg"},
+	"nodes": [
+		{"id": "2-1", "type": "battle", "name": "경계의 숲길", "pos": [0.5, 0.93], "rec_level": 6, "desc": "{region}로 이어지는 숲길. 낯선 정령들이 길을 막는다.", "enemies": [{"species": "@reg_a", "level": 6}, {"species": "@reg_b", "level": 6}, {"species": "@any", "level": 5}], "rewards": {"gold": 60, "items": ["reed_flute"]}, "dialogue_pre": "2-1_pre", "dialogue_post": "2-1_post", "links": ["2-e1", "2-2"]},
+		{"id": "2-e1", "type": "event", "name": "덤불 속 울음소리", "pos": [0.2, 0.78], "desc": "덤불 속에서 작은 울음소리가 들린다.", "lines": "2-e1_lines", "choices": [{"label": "상처를 돌봐 준다", "result": "정령의 실을 이어 주자, 정령이 다가와 계약을 맺었다!", "effects": [{"spirit": {"species": "@reg_a", "level": 5}}]}, {"label": "조용히 지나간다", "result": "정령이 사라진 자리에 반짝이는 돌이 떨어져 있었다. (40골드)", "effects": [{"gold": 40}]}], "links": ["2-shop"]},
+		{"id": "2-2", "type": "battle", "name": "안개 늪", "pos": [0.8, 0.78], "rec_level": 6, "desc": "발목까지 잠기는 늪. 결사가 풀어 놓은 정령도 섞여 있다.", "enemies": [{"species": "@reg_b", "level": 6}, {"species": "@strong_a", "level": 6}, {"species": "@reg_a", "level": 7}], "rewards": {"gold": 70}, "dialogue_pre": "2-2_pre", "dialogue_post": "2-2_post", "links": ["2-shop"]},
+		{"id": "2-shop", "type": "shop", "name": "떠돌이 상인의 수레", "pos": [0.5, 0.63], "desc": "언덕 위의 상인 수레. 몇 번 싸우고 오면 물건이 바뀐다.", "pool": ["iron_claw", "crystal_rod", "storm_feather", "stone_amulet", "wind_boots", "mana_pearl", "ember_fang", "reed_flute", "tide_ring", "mist_cloak", "swift_band"], "count": 4, "links": ["2-town"]},
+		{"id": "2-town", "type": "town", "name": "{region} 마을", "pos": [0.5, 0.48], "desc": "정령사들이 쉬어 가는 마을. 여관에서 쉬면 모두 회복된다.", "links": ["2-3", "2-e2"]},
+		{"id": "2-3", "type": "battle", "name": "수련장 언덕", "pos": [0.22, 0.33], "rec_level": 7, "desc": "마을의 수련 정령사가 대결을 청한다.", "summoner": {"name": "수련 정령사 하린", "element": "@reg", "level": 7, "party": [{"species": "@reg_a", "level": 6}, {"species": "@reg_b", "level": 6}]}, "enemies": [], "rewards": {"gold": 90, "items": ["tide_ring"]}, "dialogue_pre": "2-3_pre", "dialogue_post": "2-3_post", "links": ["2-4"]},
+		{"id": "2-e2", "type": "event", "name": "회색 천막", "pos": [0.78, 0.33], "desc": "결사의 야영지가 보인다.", "lines": "2-e2_lines", "choices": [{"label": "몰래 살펴본다", "result": "천막 구석에서 마력 진주를 찾아냈다! 회색 실 뭉치도 보였다…", "effects": [{"item": "mana_pearl"}]}, {"label": "정면으로 쳐들어간다", "result": "보초 정령들이 덤벼든다!", "effects": [{"battle": {"name": "회색 천막", "enemies": [{"species": "@strong_a", "level": 7}, {"species": "@strong_b", "level": 7}], "gold": 80}}]}], "links": ["2-4"]},
+		{"id": "2-4", "type": "battle", "name": "결사 간부", "pos": [0.5, 0.2], "rec_level": 8, "desc": "수호 정령의 제단으로 가는 길목. 회색 결사의 간부가 기다린다.", "summoner": {"name": "결사 간부 바렌", "element": "@strong", "level": 8, "party": [{"species": "@strong_a", "level": 7}, {"species": "@strong_b", "level": 7}, {"species": "@reg_a", "level": 7}]}, "enemies": [], "rewards": {"gold": 120, "items": ["mist_cloak"]}, "dialogue_pre": "2-4_pre", "dialogue_post": "2-4_post", "links": ["2-5"]},
+		{"id": "2-5", "type": "boss", "name": "수호 정령의 제단", "pos": [0.5, 0.06], "rec_level": 9, "goal": true, "desc": "실이 엉킨 {reg_guardian}을(를) 구하자. HP를 30% 아래로 줄이면 디스펠할 수 있다.", "enemies": [{"species": "@reg_a", "level": 8}, {"species": "@reg_b", "level": 8}], "guardian": {"species": "@reg_guardian", "level": 10}, "rewards": {"gold": 200, "items": ["ember_fang"]}, "dialogue_pre": "2-5_pre", "dialogue_post": "2-5_post", "links": []}
+	],
+	"dialogues": {
+		"ch2_intro": [
+			{"s": "", "t": "고향을 떠나 길을 따라 걷기를 며칠. 안개 너머로 {region}의 풍경이 보이기 시작했다."},
+			{"s": "{rival}", "t": "왔구나, {player}. 여긴 내 고향이야. …그리고 지금은 실이 끊어진 정령들 천지지."},
+			{"s": "{rival}", "t": "회색 결사가 이 지역 수호 정령 {reg_guardian}까지 노리고 있어. 길을 따라 숲, 마을, 결사의 거점까지 가 보자."},
+			{"s": "", "t": "▶ 지도에서 지점을 눌러 이동해요. 이어진 길을 따라 하나씩 열리고, 상점과 마을은 언제든 다시 들를 수 있어요."}
+		],
+		"2-1_pre": [
+			{"s": "", "t": "{region}로 이어지는 숲길. 낯선 속성의 정령들이 길을 막고 있다."},
+			{"s": "{rival}", "t": "이 지역 정령들은 네 고향 정령들과 성질이 달라. 상성을 잘 보고 싸워!"}
+		],
+		"2-1_post": [
+			{"s": "{player}", "t": "여기 정령들도 실이 회색으로 바래 있어."},
+			{"s": "{rival}", "t": "결사 짓이야. 갈림길이 있네. 어느 쪽으로 가든 상인 수레가 있는 언덕에서 만나."}
+		],
+		"2-2_pre": [
+			{"s": "", "t": "발목까지 잠기는 안개 늪. 결사가 풀어 놓은 정령들이 섞여 있다."}
+		],
+		"2-2_post": [
+			{"s": "{player}", "t": "안개가 걷혔어. 저 언덕 위에 수레가 보여."}
+		],
+		"2-e1_lines": [
+			{"s": "", "t": "덤불 속에서 작은 정령이 웅크리고 떨고 있다. 끊어진 실이 다리에 엉켜 있다."},
+			{"s": "{player}", "t": "다쳤구나…. 어떻게 하지?"}
+		],
+		"2-e2_lines": [
+			{"s": "", "t": "회색 천막 몇 개가 서 있다. 결사의 야영지다. 보초는 정령 둘뿐인 것 같다."},
+			{"s": "{player}", "t": "몰래 살펴볼까, 아니면…"}
+		],
+		"2-3_pre": [
+			{"s": "수련 정령사 하린", "t": "너구나? 고향에서 수호 정령을 구했다는 견습 정령사가."},
+			{"s": "수련 정령사 하린", "t": "{rival} 언니가 칭찬하길래 궁금했어. 내 정령들이랑 한판 붙어 보자!"}
+		],
+		"2-3_post": [
+			{"s": "수련 정령사 하린", "t": "졌다…! 결사 간부가 북쪽 제단으로 갔어. 조심해."}
+		],
+		"2-4_pre": [
+			{"s": "결사 간부 바렌", "t": "또 정령사인가. 너희는 정령을 실로 묶어 부리면서 그걸 인연이라 부르지."},
+			{"s": "{player}", "t": "실을 끊어서 정령들이 고통받고 있잖아! 그게 해방이야?"},
+			{"s": "결사 간부 바렌", "t": "아픔 없는 자유는 없다. 수호 정령의 실도 곧 끊어질 거다. 막아 보든가."}
+		],
+		"2-4_post": [
+			{"s": "결사 간부 바렌", "t": "…제법이군. 하지만 늦었다. 제단의 실은 이미 엉켰다."},
+			{"s": "", "t": "간부는 회색 안개 속으로 모습을 감췄다."}
+		],
+		"2-5_pre": [
+			{"s": "", "t": "제단 위에서 {reg_guardian}이(가) 몸부림치고 있다. 회색 실이 온몸을 칭칭 감고 있다."},
+			{"s": "{rival}", "t": "고향의 수호 정령이야…. {player}, 같이 구하자!"}
+		],
+		"2-5_post": [
+			{"s": "{reg_guardian}", "t": "…따뜻한 실이구나. 고마워, 정령사들."},
+			{"s": "{rival}", "t": "고마워, {player}. 이제 결사의 본거지를 찾아야 해."},
+			{"s": "{reg_guardian}", "t": "나머지 땅의 수호 정령들도 위험해. 내 힘을 빌려줄게."}
+		],
+		"ch2_end": [
+			{"s": "", "t": "— 2장 안개 너머의 길 · 끝 —"},
+			{"s": "", "t": "체험판은 여기까지예요. 정식판에서는 나머지 두 지역과 무색의 도시가 기다리고 있어요."},
+			{"s": "", "t": "상점·마을·사냥터는 계속 이용할 수 있어요. 정령을 모으고 키워 보세요."}
+		]
+	},
+	"tutorials": {"2-1": [{"id": "travel_shop", "on": "start", "s": "{rival}", "t": "이긴 전투마다 골드를 얻어. 지도 위 상인 수레에서 장비를 살 수 있으니 모아 둬!"}]}
+}

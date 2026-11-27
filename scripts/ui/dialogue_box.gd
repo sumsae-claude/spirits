@@ -20,13 +20,13 @@ const PORTRAIT_SIZE := 300.0
 const PORTRAIT_SINK := 46.0     # 초상화 아랫부분이 패널 뒤로 살짝 가려지는 정도
 
 
-## data/chapter1.json의 dialogues[key]를 parent 위에 띄운다. 대화가 없으면 null.
+## 챕터 데이터의 dialogues[key]를 parent 위에 띄운다. 대화가 없으면 null.
 static func play(parent: Node, key: String) -> DialogueBox:
-	var all: Dictionary = GameData.chapter1.get("dialogues", {})
-	if key == "" or not all.has(key):
+	var found := GameData.dialogue(key) if key != "" else []
+	if found.is_empty():
 		return null
 	var box := DialogueBox.new()
-	box.lines = all[key]
+	box.lines = found
 	parent.add_child(box)
 	return box
 

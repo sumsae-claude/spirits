@@ -30,8 +30,8 @@ func _rebuild() -> void:
 
 func _build_list(vb: VBoxContainer) -> void:
 	vb.add_child(UIKit.label("거점", 44, UIKit.GOLD))
-	vb.add_child(UIKit.label("승리 %d회 · 파티 평균 Lv.%d · 보유 장비 %d개" % [
-		GameState.battles_won, GameState.average_party_level(), GameState.inventory.size()], 22, UIKit.MUTED))
+	vb.add_child(UIKit.label("골드 %d · 승리 %d회 · 파티 평균 Lv.%d · 보유 장비 %d개" % [
+		GameState.gold, GameState.battles_won, GameState.average_party_level(), GameState.inventory.size()], 22, UIKit.MUTED))
 	if message != "":
 		vb.add_child(UIKit.label(message, 22, UIKit.GOOD))
 
@@ -41,6 +41,7 @@ func _build_list(vb: VBoxContainer) -> void:
 	list.add_child(_summoner_card())
 	list.add_child(UIKit.label("계약 정령 (%d/%d) — 전투에서 소환 가능, ★ 선봉은 자동 소환" % [
 		GameState.party.size(), GameState.MAX_PARTY], 26))
+	list.add_child(UIKit.label("보관함의 정령도 전투에서 소환할 수 있어요.", 20, UIKit.MUTED))
 	for i in GameState.party.size():
 		list.add_child(_spirit_button(GameState.party[i], i == 0))
 	list.add_child(UIKit.label("보관함 (%d)" % GameState.storage.size(), 30))
@@ -49,7 +50,7 @@ func _build_list(vb: VBoxContainer) -> void:
 	for s in GameState.storage:
 		list.add_child(_spirit_button(s))
 
-	var adv := UIKit.button("모험 — %s" % str(GameData.chapter1.get("title", "1장")), _on_adventure, false, 84)
+	var adv := UIKit.button("모험 — %s" % str(GameState.chapter_data(GameState.active_chapter).get("title", "지도")), _on_adventure, false, 84)
 	adv.add_theme_font_size_override("font_size", 30)
 	adv.add_theme_color_override("font_color", UIKit.GOLD)
 	vb.add_child(adv)

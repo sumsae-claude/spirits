@@ -589,6 +589,14 @@ func _finish(victory: bool) -> void:
 			var ps: Spirit = o
 			if GameState.storage.has(ps):   # 보관함에서 불러낸 정령도 경험치
 				lines.append_array(ps.gain_xp(total_xp))
+		var lv_total := 0
+		for o in defeated + captured:
+			lv_total += (o as Spirit).level
+		if beat_rival:
+			lv_total += enemy_summoner_unit.spirit.level * 2
+		var won_gold := GameState.battle_gold(lv_total)
+		GameState.gold += won_gold
+		lines.append("골드 +%d (보유 %d)" % [won_gold, GameState.gold])
 		if beat_rival or rng.randf() < 0.4:
 			var eid := GameData.random_equipment(rng)
 			GameState.inventory.append(eid)
@@ -1941,7 +1949,7 @@ func _draw_background() -> void:
 ## 전투 지역: 스토리 = 고향, 정령사 대결 = 상대 속성, 야생 = 가장 많은 적의 속성
 func _battle_region() -> String:
 	if not stage.is_empty():
-		return GameState.home_element()
+		return GameState.region_element()
 	if enemy_summoner_unit != null:
 		return enemy_summoner_unit.spirit.element()
 	var count := {}
@@ -2569,12 +2577,7 @@ func _build_tutorial_bubble() -> void:
 
 
 func _tutorial_steps() -> Array:
-	var all: Dictionary = GameData.chapter1.get("tutorials", {})
-	var result: Array = []
-	if not stage.is_empty():
-		result.append_array(all.get(str(stage["id"]), []))
-	result.append_array(all.get("*", []))
-	return result
+	return GameData.tutorials_for(str(stage["id"]) if not stage.is_empty() else "")
 
 
 ## 이벤트가 일어났을 때 아직 안 본 안내가 있으면 띄운다.

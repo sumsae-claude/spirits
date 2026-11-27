@@ -24,6 +24,9 @@ var party: Array = []      # Spirit
 var storage: Array = []    # Spirit
 var inventory: Array = []  # 장착하지 않은 장비 id
 var battles_won: int = 0
+var gold: int = 0
+## 지금 모험 중인 챕터 번호 (GameData.chapters 기준). 지역 표식(@reg_a 등)과 전투 배경이 이 챕터 지역을 따른다.
+var active_chapter: int = 0
 var current_encounter: Array = []  # 다음 전투에 나올 야생 정령 (Spirit)
 var current_rival: Dictionary = {}
 var hub_message := ""  # 거점 화면에 한 번 보여줄 알림 (후퇴 결과 등)
@@ -43,6 +46,8 @@ func new_game(p_name: String, element: String) -> void:
 	storage = []
 	inventory = ["wood_wand", "leaf_charm", "conductor_staff", "sage_robe"]
 	battles_won = 0
+	gold = 50
+	active_chapter = 0
 	current_encounter = []
 	cleared_stages = []
 	flags = {}
@@ -63,6 +68,8 @@ func save_game() -> void:
 		"storage": storage.map(func(s): return s.to_dict()),
 		"inventory": inventory,
 		"battles_won": battles_won,
+		"gold": gold,
+		"active_chapter": active_chapter,
 		"cleared_stages": cleared_stages,
 		"flags": flags,
 	}
@@ -97,6 +104,8 @@ func load_game() -> bool:
 			if GameData.equipment.has(str(e)):
 				inventory.append(str(e))
 	battles_won = int(data.get("battles_won", 0))
+	gold = maxi(0, int(data.get("gold", 0)))
+	active_chapter = clampi(int(data.get("active_chapter", 0)), 0, maxi(0, GameData.chapters.size() - 1))
 	cleared_stages = []
 	var cs = data.get("cleared_stages", [])
 	if typeof(cs) == TYPE_ARRAY:
@@ -264,34 +273,80 @@ func strong_element() -> String:
 	return "wind"
 
 
-func chapter_stages() -> Array:
-	return GameData.chapter1.get("stages", [])
+# ---------------------------------------------------------------- 챕터·지도 지점
+
+func chapter_data(ci: int) -> Dictionary:
+	if ci < 0 or ci >= GameData.chapters.size():
+		return {}
+	return GameData.chapters[ci]
 
 
-func stage_index(stage_id: String) -> int:
-	var stages := chapter_stages()
-	for i in stages.size():
-		if str(stages[i]["id"]) == stage_id:
-			return i
-	return -1
+func chapter_nodes(ci: int) -> Array:
+	return chapter_data(ci).get("nodes", [])
+
+
+## 챕터 지역의 속성: 1장 = 고향, 2장 = 다음 지역(라이벌 속성), 그 뒤는 데이터의 "region"
+func chapter_element(ci: int) -> String:
+	match str(chapter_data(ci).get("region", "home" if ci == 0 else "next")):
+		"home":
+			return home_element()
+		"next":
+			return rival_element()
+		"strong":
+			return strong_element()
+		"prey":
+			return prey_element()
+	return home_element()
+
+
+func region_element() -> String:
+	return chapter_element(active_chapter)
+
+
+func chapter_region_name(ci: int) -> String:
+	return str(GameData.chapter1.get("regions", {}).get(chapter_element(ci), "???"))
 
 
 func is_cleared(stage_id: String) -> bool:
 	return cleared_stages.has(stage_id)
 
 
-func is_unlocked(index: int) -> bool:
-	if index <= 0:
+## 지점이 열렸는가: 챕터 첫 지점이거나, 이 지점으로 이어진 지점 중 하나를 지나왔으면 열림
+func node_unlocked(ci: int, node: Dictionary) -> bool:
+	if not chapter_unlocked(ci):
+		return false
+	var nodes := chapter_nodes(ci)
+	if nodes.is_empty() or str(nodes[0]["id"]) == str(node["id"]):
 		return true
-	var stages := chapter_stages()
-	return index < stages.size() and is_cleared(str(stages[index - 1]["id"]))
+	for o in nodes:
+		var n: Dictionary = o
+		if is_cleared(str(n["id"])) and (n.get("links", []) as Array).has(str(node["id"])):
+			return true
+	return false
 
 
-func chapter_complete() -> bool:
-	for st in chapter_stages():
-		if not is_cleared(str(st["id"])):
-			return false
-	return true
+func chapter_complete(ci: int) -> bool:
+	for o in chapter_nodes(ci):
+		var n: Dictionary = o
+		if bool(n.get("goal", false)):
+			return is_cleared(str(n["id"]))
+	return false
+
+
+func chapter_unlocked(ci: int) -> bool:
+	return ci == 0 or (ci < GameData.chapters.size() and chapter_complete(ci - 1))
+
+
+## 이벤트·상점·마을 지점을 지나간 것으로 기록
+func mark_visited(node_id: String) -> void:
+	if not cleared_stages.has(node_id):
+		cleared_stages.append(node_id)
+	save_game()
+
+
+## 전투 승리 골드: 기본 + 쓰러뜨리거나 계약한 정령 레벨 합 × 3
+func battle_gold(levels_total: int) -> int:
+	return 10 + levels_total * 3
 
 
 ## 대화·이름 속 {player} {rival} {home} {guardian} {next} 치환
@@ -303,7 +358,13 @@ func fill_text(text: String) -> String:
 		.replace("{rival}", str(ch.get("rival_name", "세라"))) \
 		.replace("{home}", str(ch.get("regions", {}).get(home_element(), "고향"))) \
 		.replace("{next}", str(ch.get("next_regions", {}).get(home_element(), "새로운"))) \
-		.replace("{guardian}", guardian_name)
+		.replace("{guardian}", guardian_name) \
+		.replace("{region}", chapter_region_name(active_chapter)) \
+		.replace("{reg_guardian}", _species_name(str(GUARDIANS.get(region_element(), ""))))
+
+
+func _species_name(sid: String) -> String:
+	return str(GameData.species[sid]["name"]) if GameData.species.has(sid) else "수호 정령"
 
 
 ## 대화 화자(치환 전 원문: "{player}", "{rival}", "{guardian}", "촌장" …)의 초상화 키.
@@ -318,8 +379,13 @@ func speaker_portrait_key(raw_speaker: String) -> String:
 			return "summoner_%s" % rival_element()
 		"{guardian}":
 			return str(GUARDIANS.get(home_element(), ""))
-	var table: Dictionary = GameData.chapter1.get("speaker_portraits", {})
-	return str(table.get(raw_speaker, ""))
+		"{reg_guardian}":
+			return str(GUARDIANS.get(region_element(), ""))
+	var table: Dictionary = GameData.speaker_portrait_table()
+	var key := str(table.get(raw_speaker, ""))
+	if key == "@summoner_reg":
+		return "summoner_%s" % region_element()  # 그 지역 속성 정령사
+	return key
 
 
 func home_region_name() -> String:
@@ -337,6 +403,12 @@ func resolve_species(token: String) -> String:
 			return str(FAMILIES[rival_element()][0])
 		"@rival_b":
 			return str(FAMILIES[rival_element()][1])
+		"@reg_a":
+			return str(FAMILIES[region_element()][0])
+		"@reg_b":
+			return str(FAMILIES[region_element()][1])
+		"@reg_guardian":
+			return str(GUARDIANS[region_element()])
 		"@prey_a":
 			return str(FAMILIES[prey_element()][0])
 		"@prey_b":
@@ -363,6 +435,8 @@ func resolve_element(token: String) -> String:
 			return strong_element()
 		"@prey":
 			return prey_element()
+		"@reg":
+			return region_element()
 	return token
 
 
@@ -439,17 +513,25 @@ func start_stage(stage: Dictionary) -> void:
 ## 스테이지 클리어 처리. 첫 클리어면 보상. 보상 메시지 반환.
 func complete_stage(stage_id: String) -> Array[String]:
 	var lines: Array[String] = []
-	var idx := stage_index(stage_id)
-	if idx < 0:
+	var found := GameData.find_node(stage_id)
+	if found.is_empty():
+		# 이벤트 속 전투 등: 지점으로만 기록
+		if not is_cleared(stage_id):
+			cleared_stages.append(stage_id)
+		save_game()
 		return lines
-	var stage: Dictionary = chapter_stages()[idx]
+	var stage: Dictionary = found["node"]
 	if not is_cleared(stage_id):
 		cleared_stages.append(stage_id)
 		lines.append("스테이지 %s 첫 클리어!" % stage_id)
-		for item in stage.get("rewards", {}).get("items", []):
+		var rw: Dictionary = stage.get("rewards", {})
+		for item in rw.get("items", []):
 			if GameData.equipment.has(str(item)):
 				inventory.append(str(item))
 				lines.append("클리어 보상: %s" % GameData.equipment_desc(str(item)))
+		if int(rw.get("gold", 0)) > 0:
+			gold += int(rw["gold"])
+			lines.append("클리어 보상: %d골드" % int(rw["gold"]))
 		pending_dialogue = str(stage.get("dialogue_post", ""))
 	save_game()
 	return lines

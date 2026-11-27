@@ -53,7 +53,7 @@ var enemy_bench: Array = []                 # 적 정령사가 아직 소환하�
 var stage: Dictionary = {}                  # 스토리 스테이지 전투일 때 {"id", "name", "guardian"}
 var guardian_unit: BattleUnit = null        # 수호 정령 보스
 const GUARDIAN_CELL := Vector2i(4, 1)
-const GUARDIAN_REVEAL_RATIO := 0.3
+const GUARDIAN_REVEAL_RATIO := 0.4
 const GUARDIAN_DISPEL_BONUS := 0.3
 var active: BattleUnit = null
 var inspected: BattleUnit = null
@@ -512,8 +512,8 @@ func _start_enemy_phase() -> void:
 func _apply_round_terrain() -> void:
 	for o in units.duplicate():
 		var u: BattleUnit = o
-		if not u.is_active():
-			continue
+		if not u.is_active() or u.is_guardian:
+			continue  # 실이 엉킨 수호 정령은 지형(마법진·물가 등)의 힘을 받지 못한다
 		var tid := grid.terrain_at(u.cell)
 		var mp_ratio := GameData.terrain_round_mp(tid)
 		if mp_ratio > 0.0 and u.spirit.mp < u.spirit.max_mp():

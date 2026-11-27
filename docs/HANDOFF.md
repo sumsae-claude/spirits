@@ -16,11 +16,16 @@
 
 ## 1. ⚠️ 중요한 제약
 
-- **이 저장소의 코드는 아직 Godot에서 한 번도 실행된 적이 없습니다.** 클라우드 환경에서 Godot 바이너리 실행이 권한 정책으로 막혀 있어서 모든 코드를 "읽고 검토"만 했습니다. 사용자가 PC에서 실행해 보고 에러를 알려주기로 함 → **에러 리포트가 오면 최우선으로 수정.**
+- **Godot 실행 가능** (사용자가 허락함): 클라우드에서 공식 바이너리를 받아 헤드리스로 실행한다. 받는 법:
+  `curl -sSL -o g.zip https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip && unzip g.zip` (스크래치 폴더에)
+  - 임포트·컴파일 확인: `godot --headless --path . --import`
+  - **자동 플레이 테스트**: `godot --headless --path . res://tests/smoke_test.tscn` (새 게임 → 1-1 튜토리얼 → 1장 → 대륙 지도 → 2장, 20분 넘게 걸리니 백그라운드로). `SCRIPT ERROR` 줄이 버그, `SMOKE FAIL`이 진행 실패
+  - 한 스테이지 승률: `SMOKE_STAGE=1-6 SMOKE_TRIES=4 godot --headless --path . res://tests/smoke_test.tscn`
+  - 주의: 테스트 봇은 단순해서(정령사는 소극적, 정령은 적 AI를 빌려 씀) 보스 밸런스는 사람 플레이로 확인할 것
+- 화면(손맛·레이아웃)은 헤드리스로 못 본다 → 사용자 실행 피드백 우선.
 - GDScript 작성 시 주의: `:=`로 Variant 값을 추론하지 말 것(타입 명시), `min/max` 대신 `mini/maxf` 등 사용.
-- Godot은 못 돌리지만 **문법 검사는 가능**: `pip install "gdtoolkit==4.*"` 후 `for f in scripts/*/*.gd; do gdparse $f >/dev/null || echo FAIL $f; done`. (타입 추론 오류는 못 잡으므로 `:=` 규칙은 계속 손으로 확인)
-- 데이터 파일(JSON)을 바꾼 뒤에는 Python으로 JSON 유효성과 참조(스킬 id, 보상 아이템, 대화 키)를 검사하는 습관 유지.
-- 커밋 메시지는 한국어, push는 `git push origin main`. (클라우드 세션이 작업 브랜치를 지정하면 그 브랜치에 push → 사용자가 main에 병합)
+- 데이터 파일(JSON)을 바꾼 뒤에는 Python으로 JSON 유효성과 참조를 검사하고, 가능하면 자동 플레이 테스트도 돌릴 것.
+- 커밋 메시지는 한국어. 클라우드 세션이 정한 작업 브랜치에 push → 사용자가 원하면 main에 병합(이번 세션은 사용자 요청으로 매번 main 병합).
 
 ## 2. 현재까지 구현된 것 (v0.8+)
 

@@ -70,9 +70,9 @@
 		},
 		{
 			"id": "1-6", "name": "수호 정령의 제단", "map_pos": [0.5, 0.1], "rec_level": 6,
-			"desc": "실이 엉켜 폭주하는 수호 정령. HP를 30% 이하로 줄이면 실이 드러나 디스펠할 수 있다.",
+			"desc": "실이 엉켜 폭주하는 수호 정령. HP를 40% 이하로 줄이면 실이 드러나 디스펠할 수 있다.",
 			"enemies": [{"species": "@home_a", "level": 5}, {"species": "@home_b", "level": 5}],
-			"guardian": {"species": "@guardian", "level": 7},
+			"guardian": {"species": "@guardian", "level": 6},
 			"rewards": {"items": ["storm_feather"]},
 			"dialogue_pre": "1-6_pre", "dialogue_post": "1-6_post"
 		}
@@ -89,7 +89,7 @@
 			{"id": "circle", "on": "start", "s": "촌장", "t": "보랏빛 마법진 위에서 라운드를 시작하면 HP와 MP가 회복된다. 적도 노리니 먼저 차지하거라.", "focus": "circle"}
 		],
 		"1-6": [
-			{"id": "guard", "on": "start", "s": "{rival}", "t": "수호 정령은 실이 엉켜서 그냥은 디스펠이 안 돼. HP를 30% 아래로 깎아서 실을 드러내!", "focus": "guardian"},
+			{"id": "guard", "on": "start", "s": "{rival}", "t": "수호 정령은 실이 엉켜서 그냥은 디스펠이 안 돼. HP를 40% 아래로 깎아서 실을 드러내!", "focus": "guardian"},
 			{"id": "reveal", "on": "revealed", "s": "{rival}", "t": "실이 드러났어! 지금 정령사로 디스펠하면 수호 정령을 구할 수 있어!", "focus": "guardian"}
 		],
 		"*": [

@@ -63,6 +63,10 @@ func wait_scene(path_part: String, max_frames: int = 600) -> bool:
 
 
 func _run() -> void:
+	var only := OS.get_environment("SMOKE_STAGE")
+	if only != "":
+		await _stage_trial(only, int(OS.get_environment("SMOKE_TRIES")) if OS.get_environment("SMOKE_TRIES") != "" else 5)
+		return _end()
 	say("새 게임 (불)")
 	GameState.new_game("테스트", "fire")
 	get_tree().change_scene_to_file("res://scenes/world_map.tscn")
@@ -122,6 +126,57 @@ func _levels() -> String:
 	for s in GameState.party:
 		lv.append(str((s as Spirit).level))
 	return ",".join(lv)
+
+
+## 한 스테이지만 여러 번: 그 앞까지 클리어하고 파티를 권장 레벨 근처로 맞춘 뒤 승률을 본다
+## 실행: SMOKE_STAGE=1-6 SMOKE_TRIES=5 SMOKE_ELEMENT=fire godot --headless --path . res://tests/smoke_test.tscn
+func _stage_trial(stage_id: String, tries: int) -> void:
+	var el := OS.get_environment("SMOKE_ELEMENT")
+	GameState.new_game("테스트", el if el != "" else "fire")
+	var found := GameData.find_node(stage_id)
+	if found.is_empty():
+		fail("스테이지 없음: " + stage_id)
+		return
+	var ci: int = found["chapter"]
+	var rec := int((found["node"] as Dictionary).get("rec_level", 5))
+	for c in range(0, ci + 1):
+		for o in GameState.chapter_nodes(c):
+			var nid := str((o as Dictionary)["id"])
+			if nid == stage_id:
+				break
+			GameState.cleared_stages.append(nid)
+	GameState.flags["prologue_seen"] = true
+	GameState.flags["demo_end_seen"] = true
+	GameState.flags["intro_seen_%d" % ci] = true
+	GameState.active_chapter = ci
+	GameState.summoner = Summoner.create_summoner("테스트", GameState.home_element(), rec)
+	GameState.party = [Spirit.create(str(GameState.STARTERS[GameState.home_element()]), rec)]
+	for sid in [GameState.FAMILIES[GameState.prey_element()][0], GameState.FAMILIES[GameState.strong_element()][0], GameState.FAMILIES[GameState.rival_element()][1]]:
+		GameState.party.append(Spirit.create(str(sid), maxi(1, rec - 1)))
+	say("시험: %s (권장 Lv.%d) 파티 %s, 정령사 Lv.%d" % [stage_id, rec, _levels(), GameState.summoner.level])
+	get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	if not await wait_scene("world_map"):
+		return
+	await frames(20)
+	var idx := 0
+	var nodes := GameState.chapter_nodes(ci)
+	for i in nodes.size():
+		if str(nodes[i]["id"]) == stage_id:
+			idx = i
+	var wins := 0
+	for t in tries:
+		GameState.cleared_stages.erase(stage_id)
+		GameState.heal_all()
+		var wm := _select_node(ci, idx)
+		wm._busy = false
+		wm._on_node_action()
+		if not await wait_scene("battle"):
+			return
+		if await _play_battle():
+			wins += 1
+		await wait_scene("world_map")
+		await frames(20)
+	say("결과: %s %d/%d 승" % [stage_id, wins, tries])
 
 
 func _end() -> void:
@@ -257,6 +312,13 @@ func _play_battle() -> bool:
 	say("  전투 끝: %s (라운드 %d)" % ["승리" if victory else "패배", b.round_num])
 	if not victory:
 		var fl: Array = b.full_log
+		if b.guardian_unit != null:
+			var g: Object = b.guardian_unit
+			var hits := 0
+			for line in fl:
+				if str(line).contains(g.spirit.display_name() + "에게"):
+					hits += 1
+			say("    수호 정령 남은 HP %d/%d, 맞은 횟수 %d" % [g.spirit.hp, g.spirit.max_hp(), hits])
 		for k in range(maxi(0, fl.size() - 14), fl.size()):
 			say("    | " + str(fl[k]))
 	b._return_to_hub()

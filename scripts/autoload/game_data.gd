@@ -173,6 +173,16 @@ func portrait_by_key(key: String) -> Texture2D:
 	return tex
 
 
+## UI 아이콘 (assets/ui/<name>.png). 없으면 null.
+func ui_tex(name: String) -> Texture2D:
+	var path := "res://assets/ui/%s.png" % name
+	if _sprite_cache.has(path):
+		return _sprite_cache[path]
+	var tex: Texture2D = load(path) if ResourceLoader.exists(path) else null
+	_sprite_cache[path] = tex
+	return tex
+
+
 ## 전투 배경·지형 타일 (assets/battle/<name>.png). 없으면 null.
 func battle_tex(name: String) -> Texture2D:
 	var path := "res://assets/battle/%s.png" % name

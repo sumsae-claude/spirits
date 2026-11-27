@@ -25,7 +25,6 @@ const WILD_SPAWN_ROW := 2
 ## 적 정령사가 아군과 유지하려는 거리
 const ENEMY_SUMMONER_KEEP_DISTANCE := 3.0
 ## 소환되지 않은 계약 정령이 받는 경험치 비율
-const BENCH_XP_RATIO := 0.3
 ## [지형 id, 덩어리 개수, 덩어리 크기] — 출발 행(0~2, 9~11)을 피해 3~8행에 배치
 const TERRAIN_PLAN := [["circle", 2, 1], ["forest", 3, 4], ["water", 2, 3], ["hill", 2, 3], ["lava", 1, 3], ["rock", 5, 1]]
 const TERRAIN_ROW_MIN := 3
@@ -84,6 +83,8 @@ var participated: Array = []    # 이번 전투에 소환된 계약 Spirit
 var defeated: Array = []        # 쓰러뜨린 야생 Spirit
 var captured: Array = []        # 계약한 야생 Spirit
 var effects: Array = []         # 떠오르는 텍스트
+var xp_gained: Dictionary = {}  # Spirit -> 이번 전투에서 얻은 경험치 (행동할 때마다 바로 받음)
+var xp_msgs: Array[String] = [] # 전투 중 레벨업·스킬 습득 메시지 (결과 화면에 다시 보여 줌)
 var fx: Array = []              # 공격·소환·퇴장 시각 효과 {"kind", "pos", "color", "t", "dur", ...}
 var battle_speed := 1
 var rng := RandomNumberGenerator.new()
@@ -569,26 +570,9 @@ func _finish(victory: bool) -> void:
 	tut_bubble.visible = false
 	var lines: Array[String] = []
 	if victory:
-		var total_xp := 0
-		for s in defeated:
-			total_xp += BattleLogic.xp_reward(s)
-		for s in captured:
-			total_xp += BattleLogic.xp_reward(s)
 		var beat_rival := enemy_summoner_unit != null and not enemy_summoner_unit.is_active()
 		if beat_rival:
-			var bonus := BattleLogic.xp_reward(enemy_summoner_unit.spirit) * 2
-			total_xp += bonus
-			lines.append("적 정령사 %s을(를) 쓰러뜨렸다! (보너스 경험치 %d)" % [enemy_summoner_unit.spirit.display_name(), bonus])
-		lines.append("획득 경험치 %d (소환하지 않은 정령은 %d%%)" % [total_xp, int(BENCH_XP_RATIO * 100)])
-		lines.append_array(GameState.summoner.gain_xp(total_xp))
-		for o in GameState.party:
-			var s: Spirit = o
-			var amount := total_xp if participated.has(s) else int(round(total_xp * BENCH_XP_RATIO))
-			lines.append_array(s.gain_xp(amount))
-		for o in participated:
-			var ps: Spirit = o
-			if GameState.storage.has(ps):   # 보관함에서 불러낸 정령도 경험치
-				lines.append_array(ps.gain_xp(total_xp))
+			lines.append("적 정령사 %s을(를) 쓰러뜨렸다!" % enemy_summoner_unit.spirit.display_name())
 		var lv_total := 0
 		for o in defeated + captured:
 			lv_total += (o as Spirit).level
@@ -596,7 +580,7 @@ func _finish(victory: bool) -> void:
 			lv_total += enemy_summoner_unit.spirit.level * 2
 		var won_gold := GameState.battle_gold(lv_total)
 		GameState.gold += won_gold
-		lines.append("골드 +%d (보유 %d)" % [won_gold, GameState.gold])
+		lines.append("@gold:%d:보유 %d" % [won_gold, GameState.gold])
 		if beat_rival or rng.randf() < 0.4:
 			var eid := GameData.random_equipment(rng)
 			GameState.inventory.append(eid)
@@ -607,6 +591,7 @@ func _finish(victory: bool) -> void:
 	else:
 		lines.append("%s이(가) 쓰러졌다..." % GameState.summoner.display_name())
 		lines.append("정령들과 함께 돌아가 회복합니다." + (" 월드맵에서 다시 도전할 수 있어요." if not stage.is_empty() else ""))
+	lines.append_array(_xp_summary())
 	lines.append_array(_keep_captured())
 	GameState.heal_all()
 	GameState.save_game()
@@ -1338,6 +1323,8 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 			else:
 				await _anim_hop(u, GameData.element_color(u.spirit.element()))
 			_cast_summoner_skill(u, target, ssk)
+			if str(ssk["type"]) != "attack":
+				_award_xp(u, BattleLogic.SUPPORT_XP, false)
 			if str(ssk["type"]) == "attack":
 				await _try_counter(u, target)
 	await get_tree().create_timer(ACTION_DELAY).timeout
@@ -1433,6 +1420,36 @@ func _vanish(u: BattleUnit, kind: String, color: Color) -> void:
 		tw.tween_property(u, "pop", 0.2, 0.6).set_delay(0.1)
 
 
+## 행동한 아군에게 바로 경험치. 레벨이 오르면 그 자리에서 LEVEL UP 연출.
+func _award_xp(u: BattleUnit, amount: int, big: bool) -> void:
+	if u == null or u.team != 0 or amount <= 0:
+		return
+	var s := u.spirit
+	xp_gained[s] = int(xp_gained.get(s, 0)) + amount
+	var old_level := s.level
+	var msgs: Array[String] = s.gain_xp(amount)
+	effects.append({"text": "+%d EXP" % amount, "pos": u.draw_pos + Vector2(0, -26), "color": Color(0.55, 0.85, 1.0) if not big else Color(0.7, 0.95, 1.0), "t": 0.15})
+	if s.level > old_level:
+		_effect("LEVEL UP!", u.draw_pos + Vector2(0, -50), UIKit.GOLD)
+		_add_fx("rise", u.draw_pos, UIKit.GOLD, 0.9)
+	for m in msgs:
+		_log(m)
+		xp_msgs.append(m)
+	_mark_ui()
+
+
+## 결과 화면용: 정령별 획득 경험치 + 레벨업 메시지
+func _xp_summary() -> Array[String]:
+	var lines: Array[String] = []
+	for o in xp_gained:
+		var s: Spirit = o
+		lines.append("%s 경험치 +%d  (Lv.%d)" % [s.display_name(), int(xp_gained[o]), s.level])
+	if lines.is_empty():
+		lines.append("이번 전투에서 얻은 경험치가 없습니다.")
+	lines.append_array(xp_msgs)
+	return lines
+
+
 func _add_fx(kind: String, pos: Vector2, color: Color, dur: float, extra: Dictionary = {}) -> void:
 	var f := {"kind": kind, "pos": pos, "color": color, "t": 0.0, "dur": dur}
 	f.merge(extra)
@@ -1471,6 +1488,7 @@ func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> 
 
 
 func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: String, element: String) -> void:
+	var hp_before := target.spirit.hp
 	target.spirit.hp = maxi(0, target.spirit.hp - dmg)
 	var mult := GameData.element_multiplier(element, target.spirit.element())
 	var msg := "%s의 %s! %s에게 %d 피해" % [
@@ -1494,6 +1512,12 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 		_knock_out(target)
 	elif target.team == 1 and not target.is_summoner and not target.is_guardian and target.spirit.hp * 2 < target.spirit.max_hp():
 		_tutorial("weak")
+	# 경험치: 때릴 때마다 입힌 피해만큼, 마무리하면 크게
+	if attacker.team == 0 and target.team == 1:
+		var xp := BattleLogic.hit_xp(target.spirit, hp_before - target.spirit.hp)
+		if not target.alive:
+			xp += int(round(BattleLogic.xp_reward(target.spirit) * BattleLogic.KILL_XP_MULT))
+		_award_xp(attacker, xp, not target.alive)
 	_check_guardian_reveal(target)
 
 
@@ -1551,6 +1575,7 @@ func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
 	if rng.randf() < chance:
 		target.captured = true
 		captured.append(target.spirit)
+		_award_xp(u, int(round(BattleLogic.xp_reward(target.spirit) * BattleLogic.DISPEL_XP_MULT)), true)
 		# 계약한 정령은 다음 차례부터 바로 소환할 수 있다 (HP는 깎인 그대로)
 		_vanish(target, "capture", Color(1.0, 0.85, 0.4))
 		if target.is_guardian:
@@ -2518,7 +2543,7 @@ func _show_help() -> void:
 	rt.bbcode_enabled = true
 	rt.fit_content = true
 	rt.add_theme_font_size_override("normal_font_size", 22)
-	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b]\n숲: 받는 피해 -20%%\n물가: 물↑ 불↓, 물 정령 회복\n언덕: 바람↑, 원거리 사거리 +1\n용암: 불↑, 그 밖엔 화상\n마법진: 라운드마다 HP·MP 회복\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
+	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b]\n숲: 받는 피해 -20%%\n물가: 물↑ 불↓, 물 정령 회복\n모래밭: 이동 느림(바람은 빠름), 바람↑, 원거리 사거리 +1\n용암: 불↑, 그 밖엔 화상\n마법진: 라운드마다 HP·MP 회복\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
 	vb.add_child(rt)
 	vb.add_child(UIKit.spacer())
 	vb.add_child(UIKit.button("닫기", overlay.queue_free))
@@ -2927,11 +2952,15 @@ func _rebuild_ui() -> void:
 
 	log_label.text = "\n".join(PackedStringArray(log_lines))
 	cmd_panel.visible = cmd_box.get_child_count() > 0 and anchor != null
+	# 튜토리얼에서 메뉴를 쓸 수 없는 단계(고르기·이동·대기)는 메뉴를 숨겨 칸을 가리지 않게
+	if _script_active() and str(_script_step().get("do", "")) in ["select", "move", "wait"]:
+		cmd_panel.visible = false
 	if cmd_panel.visible:
 		_place_cmd_menu.call_deferred(anchor)
 
 
-## 명령 메뉴를 유닛 옆에 붙인다 (원작처럼). 화면 왼쪽 유닛이면 오른쪽에, 오른쪽 유닛이면 왼쪽에.
+## 명령 메뉴를 유닛 옆에 붙인다 (원작처럼). 오른쪽/왼쪽 × 가운데/위/아래 중에서
+## 이동할 칸·대상·튜토리얼 표시 칸을 가장 적게 가리는 자리를 고른다.
 func _place_cmd_menu(anchor: BattleUnit) -> void:
 	if anchor == null or not cmd_panel.visible:
 		return
@@ -2939,10 +2968,47 @@ func _place_cmd_menu(anchor: BattleUnit) -> void:
 	var sz := cmd_panel.get_combined_minimum_size()
 	var vp := get_viewport_rect().size
 	var p := anchor.draw_pos
-	var x := p.x + HEX_SIZE + 6.0 if p.x < vp.x * 0.5 else p.x - HEX_SIZE - 6.0 - sz.x
-	x = clampf(x, 8.0, vp.x - sz.x - 8.0)
-	var y := clampf(p.y - sz.y * 0.5, MAP_TOP + 4.0, maxf(MAP_TOP + 4.0, map_bottom - sz.y - 4.0))
-	cmd_panel.position = Vector2(x, y)
+	var top_lim := MAP_TOP + 4.0
+	var bottom_lim := maxf(top_lim, map_bottom - sz.y - 4.0)
+	var important := _menu_avoid_cells(anchor)
+	var best := Vector2.ZERO
+	var best_score := INF
+	var sides: Array = [1.0, -1.0] if p.x < vp.x * 0.5 else [-1.0, 1.0]
+	for side in sides:
+		var x := p.x + HEX_SIZE + 6.0 if side > 0.0 else p.x - HEX_SIZE - 6.0 - sz.x
+		x = clampf(x, 8.0, vp.x - sz.x - 8.0)
+		for ys in [p.y - sz.y * 0.5, p.y - sz.y + HEX_SIZE * 0.5, p.y - HEX_SIZE * 0.5]:
+			var y := clampf(float(ys), top_lim, bottom_lim)
+			var rect := Rect2(Vector2(x, y), sz).grow(6.0)
+			var score := 0.0
+			for o in important:
+				var item: Array = o
+				if rect.has_point(grid.to_pixel(item[0])):
+					score += float(item[1])
+			if score < best_score - 0.01:
+				best_score = score
+				best = Vector2(x, y)
+	cmd_panel.position = best
+
+
+## 메뉴가 가리면 곤란한 칸: [칸, 중요도]
+func _menu_avoid_cells(anchor: BattleUnit) -> Array:
+	var result: Array = [[anchor.cell, 10.0]]
+	for c in tut_focus:
+		result.append([c, 6.0])
+	if phase == "player" and not has_moved:
+		for c in reachable:
+			result.append([c, 1.0])
+	for c in targets:
+		result.append([c, 3.0])
+	for c in place_cells:
+		result.append([c, 2.0])
+	if phase == "player" and active != null:
+		for c in hit_now:
+			result.append([c, 3.0])
+		for c in reach_targets:
+			result.append([c, 1.5])
+	return result
 
 
 func _move_hint() -> String:
@@ -3291,7 +3357,7 @@ func _show_result(victory: bool, lines: Array[String]) -> void:
 	vb.add_child(UIKit.label("승리!" if victory else "패배", 60, UIKit.GOLD if victory else Color(1, 0.5, 0.45), true))
 	var list := UIKit.scroll_list(vb)
 	for line in lines:
-		list.add_child(UIKit.label(line, 26, Color.WHITE, true))
+		list.add_child(UIKit.reward_line(line, 26))
 	vb.add_child(UIKit.button("월드맵으로" if not stage.is_empty() else "거점으로", _return_to_hub))
 
 

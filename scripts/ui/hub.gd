@@ -30,8 +30,14 @@ func _rebuild() -> void:
 
 func _build_list(vb: VBoxContainer) -> void:
 	vb.add_child(UIKit.label("거점", 44, UIKit.GOLD))
-	vb.add_child(UIKit.label("골드 %d · 승리 %d회 · 파티 평균 Lv.%d · 보유 장비 %d개" % [
-		GameState.gold, GameState.battles_won, GameState.average_party_level(), GameState.inventory.size()], 22, UIKit.MUTED))
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 12)
+	var g := UIKit.gold_badge(GameState.gold, 24)
+	g.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top.add_child(g)
+	top.add_child(UIKit.label("승리 %d회 · 파티 평균 Lv.%d · 보유 장비 %d개" % [
+		GameState.battles_won, GameState.average_party_level(), GameState.inventory.size()], 22, UIKit.MUTED))
+	vb.add_child(top)
 	if message != "":
 		vb.add_child(UIKit.label(message, 22, UIKit.GOOD))
 

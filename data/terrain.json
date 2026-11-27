@@ -17,11 +17,11 @@
 		"desc": "이동 2 (물 1) · 물 피해 +20%, 매 라운드 회복 · 불 피해 -20%"
 	},
 	"hill": {
-		"name": "언덕", "color": [0.36, 0.32, 0.2], "passable": true, "move": 2,
+		"name": "모래밭", "color": [0.62, 0.52, 0.34], "passable": true, "move": 2,
 		"move_by": {"wind": 1},
 		"attack_by": {"wind": 1.2},
 		"range_bonus": 1,
-		"desc": "이동 2 (바람 1) · 바람 피해 +20% · 원거리 스킬 사거리 +1"
+		"desc": "발이 빠져 이동 2 (바람 1) · 탁 트여 바람 피해 +20% · 원거리 스킬 사거리 +1"
 	},
 	"lava": {
 		"name": "용암지대", "color": [0.42, 0.15, 0.1], "passable": true, "move": 1,

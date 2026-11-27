@@ -48,5 +48,21 @@ static func heal_amount(caster: Spirit, target: Spirit, sk: Dictionary) -> int:
 	return maxi(1, int(round(target.max_hp() * float(sk.get("heal_ratio", 0.3)) + float(sk.get("heal_flat", 0)) + caster.level)))
 
 
+## 행동마다 경험치: 공격(기본·스킬·반격)으로 입힌 피해 비율 × 이 값 × xp_reward
+const HIT_XP_RATIO := 0.5
+## 마무리(쓰러뜨림)·디스펠 성공 보너스 = xp_reward × 이 값
+const KILL_XP_MULT := 1.0
+const DISPEL_XP_MULT := 1.0
+## 회복·버프·디버프 정령사 스킬 1회
+const SUPPORT_XP := 3
+
+
+static func hit_xp(target: Spirit, dealt: int) -> int:
+	if dealt <= 0:
+		return 0
+	var ratio := float(dealt) / float(maxi(1, target.max_hp()))
+	return maxi(1, int(round(float(xp_reward(target)) * HIT_XP_RATIO * ratio)))
+
+
 static func xp_reward(enemy: Spirit) -> int:
 	return 6 + enemy.level * 4

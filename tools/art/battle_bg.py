@@ -176,15 +176,19 @@ def t_water():
 
 
 def t_hill():
-    img = Image.new("RGBA", (TW, TH), (0, 0, 0, 0))
+    # 모래밭 (지형 id는 hill 그대로): 밝은 모래 + 바람 물결 무늬 + 조개·자갈. 헥스를 꽉 채워 바위와 헷갈리지 않게
+    img = tile_base([(206, 176, 118), (222, 194, 136), (236, 212, 158)], 13, cells=(12, 4))
     d = ImageDraw.Draw(img)
-    d.ellipse([2, 14, 38, 44], fill=(120, 100, 60, 255), outline=OUTL)
-    d.ellipse([5, 15, 33, 37], fill=(150, 128, 76, 255))
-    d.ellipse([9, 16, 25, 28], fill=(178, 156, 96, 255))
-    d.ellipse([20, 6, 36, 24], fill=(132, 112, 68, 255), outline=OUTL)
-    d.ellipse([22, 7, 32, 17], fill=(170, 148, 90, 255))
-    for x, y in ((8, 30), (16, 38), (28, 32), (30, 14)):
-        d.point([(x, y), (x - 1, y - 1), (x + 1, y - 1)], fill=(110, 150, 70, 255))
+    for y0 in (9, 17, 25, 33, 40):
+        for x in range(3, 37):
+            y = y0 + int(round(1.6 * math.sin(x * 0.45 + y0)))
+            d.point((x, y), fill=(184, 150, 96, 255))
+            d.point((x, y - 1), fill=(246, 228, 182, 255))
+    d.ellipse([10, 20, 15, 24], fill=(250, 214, 214, 255), outline=(196, 140, 140, 255))   # 조개
+    d.point((12, 22), fill=(220, 160, 160, 255))
+    d.rectangle([26, 29, 28, 30], fill=(150, 140, 128, 255))                             # 자갈
+    d.point((26, 29), fill=(196, 188, 176, 255))
+    d.point([(30, 13), (8, 34), (20, 37)], fill=(170, 132, 84, 255))
     return clip(img)
 
 

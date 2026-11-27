@@ -30,6 +30,7 @@ var token_pos := Vector2.ZERO  # 지도 위 정령사 말 (그리기 좌표)
 var panel_box: VBoxContainer
 var title_label: Label
 var overlay: Control = null
+var gold_holder: Control       # 오른쪽 위 골드 표시 자리
 
 
 func _ready() -> void:
@@ -139,10 +140,12 @@ func _token_node() -> int:
 
 func _update_title() -> void:
 	if mode == "continent":
-		title_label.text = "대륙 지도\n골드 %d" % GameState.gold
+		title_label.text = "대륙 지도"
 	else:
-		title_label.text = "%s · %s\n골드 %d" % [str(GameState.chapter_data(chapter).get("title", "")),
-			GameState.chapter_region_name(chapter), GameState.gold]
+		title_label.text = "%s\n%s" % [str(GameState.chapter_data(chapter).get("title", "")), GameState.chapter_region_name(chapter)]
+	if gold_holder != null:
+		UIKit.clear(gold_holder)
+		gold_holder.add_child(UIKit.gold_badge(GameState.gold, 22))
 
 
 # ---------------------------------------------------------------- 그리기
@@ -352,6 +355,13 @@ func _build_ui() -> void:
 	title_label.add_theme_color_override("font_color", UIKit.GOLD)
 	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(title_label)
+	gold_holder = HBoxContainer.new()
+	gold_holder.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	gold_holder.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	gold_holder.offset_top = 16
+	gold_holder.offset_right = -16
+	gold_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(gold_holder)
 
 	var panel := PanelContainer.new()
 	panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -440,13 +450,18 @@ func _build_region_panel() -> void:
 		panel_box.add_child(_enemy_icons(n))
 		var rewards := PackedStringArray()
 		var rw: Dictionary = n.get("rewards", {})
-		if int(rw.get("gold", 0)) > 0:
-			rewards.append("%d골드" % int(rw["gold"]))
 		for item in rw.get("items", []):
 			if GameData.equipment.has(str(item)):
 				rewards.append(str(GameData.equipment[str(item)]["name"]))
-		if not rewards.is_empty():
-			panel_box.add_child(UIKit.label("첫 클리어 보상: " + ", ".join(rewards) + (" (받음)" if done else ""), 20, UIKit.GOOD))
+		if not rewards.is_empty() or int(rw.get("gold", 0)) > 0:
+			var rrow := HBoxContainer.new()
+			rrow.add_theme_constant_override("separation", 10)
+			rrow.add_child(UIKit.label("첫 클리어 보상%s" % (" (받음)" if done else ""), 20, UIKit.GOOD))
+			if int(rw.get("gold", 0)) > 0:
+				rrow.add_child(UIKit.gold_badge(int(rw["gold"]), 18))
+			if not rewards.is_empty():
+				rrow.add_child(UIKit.label(", ".join(rewards), 20, UIKit.GOOD))
+			panel_box.add_child(rrow)
 	panel_box.add_child(UIKit.spacer())
 	var action := "출발"
 	var blocked := not unlocked
@@ -612,7 +627,8 @@ func _shop_stock() -> Array:
 
 func _rebuild_shop() -> void:
 	var vb := _open_overlay(GameState.fill_text(str(shop_node.get("name", "상점"))))
-	vb.add_child(UIKit.label("보유 골드 %d" % GameState.gold, 26, UIKit.GOLD, true))
+	var have := UIKit.gold_badge(GameState.gold, 28, "", "보유")
+	vb.add_child(have)
 	if shop_msg != "":
 		vb.add_child(UIKit.label(shop_msg, 22, UIKit.GOOD, true))
 	var tabs := HBoxContainer.new()
@@ -626,7 +642,7 @@ func _rebuild_shop() -> void:
 		for o in _shop_stock():
 			var eid := str(o)
 			var price := GameData.equipment_price(eid)
-			list.add_child(_shop_row(eid, "%d골드" % price, "사기", _buy.bind(eid), GameState.gold < price))
+			list.add_child(_shop_row(eid, price, "", "사기", _buy.bind(eid), GameState.gold < price))
 	else:
 		var counts := {}
 		for o in GameState.inventory:
@@ -635,17 +651,20 @@ func _rebuild_shop() -> void:
 			list.add_child(UIKit.label("팔 수 있는 장비가 없습니다. (장착 중인 장비는 팔 수 없어요)", 22, UIKit.MUTED))
 		for eid in counts:
 			var sell := GameData.equipment_price(str(eid)) / 2
-			list.add_child(_shop_row(str(eid), "×%d · %d골드" % [int(counts[eid]), sell], "팔기", _sell.bind(str(eid)), false))
+			list.add_child(_shop_row(str(eid), sell, "×%d" % int(counts[eid]), "팔기", _sell.bind(str(eid)), false))
 	vb.add_child(UIKit.button("나가기", _close_overlay))
 
 
-func _shop_row(eid: String, price_text: String, verb: String, cb: Callable, disabled: bool) -> Control:
+func _shop_row(eid: String, price: int, extra: String, verb: String, cb: Callable, disabled: bool) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	var e: Dictionary = GameData.equipment[eid]
-	var info := UIKit.label("%s [%s]\n%s · %s" % [e["name"], GameData.SLOT_NAMES.get(str(e["slot"]), ""),
-		GameData.bonus_text(e["bonus"]), price_text], 22)
+	var info := UIKit.label("%s [%s] %s\n%s" % [e["name"], GameData.SLOT_NAMES.get(str(e["slot"]), ""), extra,
+		GameData.bonus_text(e["bonus"])], 22)
 	row.add_child(info)
+	var tag := UIKit.gold_badge(price, 20)
+	tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(tag)
 	var b := UIKit.button(verb, cb, disabled, 70)
 	b.size_flags_horizontal = Control.SIZE_SHRINK_END
 	b.custom_minimum_size = Vector2(130, 70)
@@ -718,6 +737,7 @@ func _choose_event(n: Dictionary, choice: Dictionary) -> void:
 		var eff: Dictionary = o
 		if eff.has("gold"):
 			GameState.gold += int(eff["gold"])
+			lines.append("@gold:%d:" % int(eff["gold"]))
 		if eff.has("item") and GameData.equipment.has(str(eff["item"])):
 			GameState.inventory.append(str(eff["item"]))
 			lines.append("장비 획득: %s" % GameData.equipment_desc(str(eff["item"])))
@@ -732,7 +752,8 @@ func _choose_event(n: Dictionary, choice: Dictionary) -> void:
 			battle = eff["battle"]
 	GameState.save_game()
 	var vb := _open_overlay(GameState.fill_text(str(n.get("name", "이벤트"))))
-	vb.add_child(UIKit.label("\n".join(lines), 24, Color.WHITE, true))
+	for line in lines:
+		vb.add_child(UIKit.reward_line(line, 24))
 	vb.add_child(UIKit.spacer())
 	if battle.is_empty():
 		vb.add_child(UIKit.button("확인", _close_overlay))

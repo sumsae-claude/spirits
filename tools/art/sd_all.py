@@ -158,6 +158,27 @@ def npc_grey():
         '<path d="M196,182 L232,196 M316,182 L280,196" stroke="#2a1f33" stroke-width="8" stroke-linecap="round"/>'
         + eyes(256, 214, 46, 22)
         + '<path d="M300,280 C320,290 330,300 344,296" stroke="#c9ccd6" stroke-width="4" fill="none" stroke-dasharray="8 6"/>')
+def npc_harin(robe, trim, orb):
+    # 수련 정령사 하린: 양쪽 똥머리 + 리본, 짧은 망토, 별 장식 지팡이, 씩씩한 표정
+    return svg(grad("r", trim, robe, robe),
+        f'<line x1="440" y1="150" x2="440" y2="470" stroke="#6a4630" stroke-width="14" stroke-linecap="round"/>'
+        f'<path d="M440,92 L452,124 L486,126 L459,146 L469,180 L440,160 L411,180 L421,146 L394,126 L428,124Z" fill="{orb}" stroke="#3a2a40" stroke-width="6" stroke-linejoin="round"/>'
+        f'<path d="M160,300 L352,300 L392,470 L120,470Z" fill="url(#r)" stroke="#3a2a40" stroke-width="8" stroke-linejoin="round"/>'
+        f'<path d="M150,300 L362,300 L340,380 L256,350 L172,380Z" fill="{trim}" stroke="#3a2a40" stroke-width="6" stroke-linejoin="round"/>'
+        '<circle cx="132" cy="120" r="56" fill="#7a3a28" stroke="#3a2a40" stroke-width="7"/><circle cx="380" cy="120" r="56" fill="#7a3a28" stroke="#3a2a40" stroke-width="7"/>'
+        f'<path d="M150,160 l-34,-20 l4,40Z M362,160 l34,-20 l-4,40Z" fill="{orb}" stroke="#3a2a40" stroke-width="5" stroke-linejoin="round"/>'
+        '<ellipse cx="256" cy="200" rx="146" ry="138" fill="#8a4330" stroke="#3a2a40" stroke-width="7"/>'
+        '<path d="M112,220 C100,300 130,330 150,300 Z M400,220 C412,300 382,330 362,300 Z" fill="#8a4330" stroke="#3a2a40" stroke-width="6"/>'
+        '<ellipse cx="256" cy="222" rx="124" ry="114" fill="#ffe0c8" stroke="#3a2a40" stroke-width="7"/>'
+        '<path d="M128,205 C130,110 382,110 384,205 C350,170 330,150 300,165 C280,140 240,140 214,165 C180,150 160,170 128,205Z" fill="#8a4330" stroke="#3a2a40" stroke-width="6" stroke-linejoin="round"/>'
+        '<path d="M206,186 L238,196 M306,186 L274,196" stroke="#3a2a40" stroke-width="8" stroke-linecap="round"/>'
+        + eyes(256, 228, 46, 25) + blush(256, 262, 80) +
+        '<path d="M240,276 Q256,292 272,276" stroke="#3a2a40" stroke-width="6" fill="#d9556a" stroke-linejoin="round"/>'
+        '<ellipse cx="418" cy="320" rx="28" ry="24" fill="#ffe0c8" stroke="#3a2a40" stroke-width="6"/>')
+A["npc_harin_wind"] = npc_harin("#5fa9c4", "#e8f8ff", "#bfe9f3")
+A["npc_harin_fire"] = npc_harin("#c9483a", "#ffd2b0", "#ffb02e")
+A["npc_harin_grass"] = npc_harin("#4f9a3c", "#ddf4bf", "#8be07a")
+A["npc_harin_water"] = npc_harin("#3a6fc4", "#d0e6ff", "#6fb3ff")
 A["npc_elder"] = npc_elder()
 A["npc_grey"] = npc_grey()
 

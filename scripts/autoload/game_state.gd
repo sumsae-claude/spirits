@@ -382,9 +382,16 @@ func speaker_portrait_key(raw_speaker: String) -> String:
 		"{reg_guardian}":
 			return str(GUARDIANS.get(region_element(), ""))
 	var table: Dictionary = GameData.speaker_portrait_table()
-	var key := str(table.get(raw_speaker, ""))
-	if key == "@summoner_reg":
-		return "summoner_%s" % region_element()  # 그 지역 속성 정령사
+	return resolve_portrait(str(table.get(raw_speaker, "")))
+
+
+## 초상화 표식: "@summoner_reg" = 그 지역 속성 정령사, "@harin_reg" = 그 지역 속성 하린
+func resolve_portrait(key: String) -> String:
+	match key:
+		"@summoner_reg":
+			return "summoner_%s" % region_element()
+		"@harin_reg":
+			return "npc_harin_%s" % region_element()
 	return key
 
 
@@ -467,7 +474,8 @@ func stage_preview(stage: Dictionary) -> Array:
 		out.append({"key": resolve_species(str(stage["guardian"]["species"])), "boss": true})
 	var sm = stage.get("summoner", null)
 	if typeof(sm) == TYPE_DICTIONARY:
-		out.append({"key": "summoner_%s" % resolve_element(str(sm["element"])), "boss": true})
+		var pkey := resolve_portrait(str(sm.get("portrait", "")))
+		out.append({"key": pkey if pkey != "" else "summoner_%s" % resolve_element(str(sm["element"])), "boss": true})
 		for e in sm["party"]:
 			out.append({"key": _preview_species(str(e["species"])), "boss": false})
 	for e in stage.get("enemies", []):
@@ -531,7 +539,7 @@ func complete_stage(stage_id: String) -> Array[String]:
 				lines.append("클리어 보상: %s" % GameData.equipment_desc(str(item)))
 		if int(rw.get("gold", 0)) > 0:
 			gold += int(rw["gold"])
-			lines.append("클리어 보상: %d골드" % int(rw["gold"]))
+			lines.append("@gold:%d:첫 클리어 보상" % int(rw["gold"]))
 		pending_dialogue = str(stage.get("dialogue_post", ""))
 	save_game()
 	return lines

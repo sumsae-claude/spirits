@@ -20,7 +20,7 @@ func _show_title() -> void:
 		vb.add_child(UIKit.label(_message, 24, Color(1, 0.6, 0.5), true))
 	vb.add_child(UIKit.button("새 게임", _on_new_game))
 	vb.add_child(UIKit.button("이어하기", _on_continue, not GameState.has_save()))
-	vb.add_child(UIKit.label("프로토타입 v0.6", 20, UIKit.MUTED, true))
+	vb.add_child(UIKit.label("프로토타입 v0.7", 20, UIKit.MUTED, true))
 
 
 func _on_new_game() -> void:

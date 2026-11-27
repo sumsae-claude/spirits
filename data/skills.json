@@ -7,9 +7,9 @@
 	"water_lance": {"name": "물의 창", "element": "water", "power": 80, "mp": 6, "range_min": 1, "range_max": 3, "desc": "날카로운 물줄기를 쏜다."},
 	"tidal_crash": {"name": "해일", "element": "water", "power": 115, "mp": 10, "range_min": 1, "range_max": 2, "desc": "거대한 파도로 덮친다."},
 
-	"pebble_shot": {"name": "돌팔매", "element": "earth", "power": 55, "mp": 3, "range_min": 1, "range_max": 2, "desc": "단단한 돌을 던진다."},
-	"rock_slam": {"name": "암석강타", "element": "earth", "power": 90, "mp": 6, "range_min": 1, "range_max": 1, "desc": "바위 같은 몸으로 들이받는다."},
-	"quake": {"name": "대지진동", "element": "earth", "power": 115, "mp": 10, "range_min": 1, "range_max": 2, "desc": "땅을 뒤흔든다."},
+	"pebble_shot": {"name": "씨앗탄", "element": "grass", "power": 55, "mp": 3, "range_min": 1, "range_max": 2, "desc": "단단한 씨앗을 쏘아 보낸다."},
+	"rock_slam": {"name": "덩굴채찍", "element": "grass", "power": 90, "mp": 6, "range_min": 1, "range_max": 1, "desc": "굵은 덩굴로 세차게 후려친다."},
+	"quake": {"name": "꽃잎폭풍", "element": "grass", "power": 115, "mp": 10, "range_min": 1, "range_max": 2, "desc": "날카로운 꽃잎을 휘몰아친다."},
 
 	"gust": {"name": "돌풍", "element": "wind", "power": 55, "mp": 3, "range_min": 1, "range_max": 2, "desc": "세찬 바람을 일으킨다."},
 	"air_blade": {"name": "바람칼날", "element": "wind", "power": 80, "mp": 6, "range_min": 1, "range_max": 3, "desc": "보이지 않는 칼날로 벤다."},

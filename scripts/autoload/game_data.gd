@@ -1,15 +1,15 @@
 extends Node
 ## 정적 게임 데이터(정령/스킬/장비)와 속성 상성, 공용 테마를 관리한다.
 
-const ELEMENT_NAMES := {"fire": "불", "water": "물", "earth": "흙", "wind": "바람"}
+const ELEMENT_NAMES := {"fire": "불", "water": "물", "grass": "풀", "wind": "바람"}
 const ELEMENT_COLORS := {
 	"fire": Color(0.92, 0.38, 0.25),
 	"water": Color(0.25, 0.55, 0.95),
-	"earth": Color(0.68, 0.52, 0.28),
-	"wind": Color(0.35, 0.78, 0.5),
+	"grass": Color(0.38, 0.78, 0.32),
+	"wind": Color(0.72, 0.9, 0.95),
 }
-## key 속성이 value 속성에 강하다: 불 > 바람 > 흙 > 물 > 불
-const STRONG_AGAINST := {"fire": "wind", "wind": "earth", "earth": "water", "water": "fire"}
+## key 속성이 value 속성에 강하다: 바람 > 불 > 풀 > 물 > 바람
+const STRONG_AGAINST := {"wind": "fire", "fire": "grass", "grass": "water", "water": "wind"}
 const STRONG_MULT := 1.5
 const WEAK_MULT := 0.75
 const SLOT_NAMES := {"weapon": "무기", "accessory": "장신구"}
@@ -162,16 +162,16 @@ func terrain_round_mp(tid: String) -> float:
 	return float(terrain_info(tid).get("mp_regen_all", 0.0))
 
 
-## "불 ▶ 바람 ▶ 흙 ▶ 물 ▶ 불" (속성 색 BBCode)
+## "바람 ▶ 불 ▶ 풀 ▶ 물 ▶ 바람" (속성 색 BBCode)
 func element_chart_bbcode() -> String:
 	var parts := PackedStringArray()
-	for el in ["fire", "wind", "earth", "water", "fire"]:
+	for el in ["wind", "fire", "grass", "water", "wind"]:
 		parts.append("[color=#%s]%s[/color]" % [element_color(el).lightened(0.3).to_html(false), element_name(el)])
 	return " ▶ ".join(parts)
 
 
 func element_chart_text() -> String:
-	return "불 ▶ 바람 ▶ 흙 ▶ 물 ▶ 불 (▶ 방향으로 공격하면 1.5배, 반대는 0.75배)"
+	return "바람 ▶ 불 ▶ 풀 ▶ 물 ▶ 바람 (▶ 방향으로 공격하면 1.5배, 반대는 0.75배)"
 
 
 func equipment_desc(eid: String) -> String:

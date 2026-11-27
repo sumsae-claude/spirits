@@ -10,9 +10,9 @@
 		"desc": "강한 물줄기로 적 하나를 공격한다."
 	},
 	"stone_bolt": {
-		"name": "바위창", "type": "attack", "target": "enemy", "element": "earth", "element_req": "earth",
+		"name": "가시덩굴", "type": "attack", "target": "enemy", "element": "grass", "element_req": "grass",
 		"power": 65, "mp": 5, "range_min": 1, "range_max": 3, "learn_level": 1,
-		"desc": "뾰족한 바위를 솟구치게 해 적 하나를 공격한다."
+		"desc": "가시 돋친 덩굴을 뻗어 적 하나를 공격한다."
 	},
 	"wind_bolt": {
 		"name": "진공탄", "type": "attack", "target": "enemy", "element": "wind", "element_req": "wind",
@@ -50,7 +50,7 @@
 		"desc": "적 하나의 방어 -30% (2라운드)."
 	},
 	"earth_breath": {
-		"name": "대지의 숨결", "type": "heal", "target": "self", "area": 2,
+		"name": "숲의 숨결", "type": "heal", "target": "self", "area": 2,
 		"heal_ratio": 0.25, "heal_flat": 5, "mp": 12, "range_min": 0, "range_max": 0, "learn_level": 10,
 		"desc": "정령사 주변 2칸 안의 아군 모두 회복. (최대 HP 25% + α)"
 	}

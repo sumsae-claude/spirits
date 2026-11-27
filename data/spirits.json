@@ -66,23 +66,23 @@
 	},
 
 	"pebble": {
-		"name": "조약돌이", "element": "earth", "wild": true, "catch": 1.0,
-		"desc": "냇가의 조약돌에 깃든 단단한 정령.",
+		"name": "새싹이", "element": "grass", "wild": true, "catch": 1.0,
+		"desc": "머리에 새싹 두 장을 단 풀의 정령. 햇볕을 쬐면 기운이 난다.",
 		"base": {"hp": 34, "mp": 10, "atk": 11, "def": 10, "spd": 7, "mov": 3},
 		"growth": {"hp": 5.5, "mp": 1.2, "atk": 2, "def": 1.7, "spd": 0.8},
 		"skills": [{"id": "pebble_shot", "level": 1}, {"id": "rock_slam", "level": 5}],
 		"evolves_to": "boulder", "evolve_level": 8
 	},
 	"boulder": {
-		"name": "바위거인", "element": "earth", "wild": false, "catch": 0.7,
-		"desc": "커다란 바위로 몸을 쌓아 올린 정령.",
+		"name": "덩굴거인", "element": "grass", "wild": false, "catch": 0.7,
+		"desc": "굵은 덩굴로 몸을 엮어 올린 거대한 풀의 정령.",
 		"base": {"hp": 46, "mp": 13, "atk": 15, "def": 14, "spd": 8, "mov": 3},
 		"growth": {"hp": 6.5, "mp": 1.4, "atk": 2.5, "def": 2.1, "spd": 0.9},
 		"skills": [{"id": "pebble_shot", "level": 1}, {"id": "rock_slam", "level": 5}, {"id": "quake", "level": 12}],
 		"evolves_to": "", "evolve_level": 0
 	},
 	"mossturtle": {
-		"name": "이끼거북", "element": "earth", "wild": true, "catch": 1.0,
+		"name": "이끼거북", "element": "grass", "wild": true, "catch": 1.0,
 		"desc": "등에 이끼 정원을 키우는 느긋한 거북 정령.",
 		"base": {"hp": 40, "mp": 10, "atk": 8, "def": 13, "spd": 5, "mov": 2},
 		"growth": {"hp": 6.5, "mp": 1.2, "atk": 1.5, "def": 2.2, "spd": 0.6},
@@ -90,7 +90,7 @@
 		"evolves_to": "oaktortoise", "evolve_level": 12
 	},
 	"oaktortoise": {
-		"name": "고목거북", "element": "earth", "wild": false, "catch": 0.7,
+		"name": "고목거북", "element": "grass", "wild": false, "catch": 0.7,
 		"desc": "등껍질에서 고목이 자라난 오래된 정령.",
 		"base": {"hp": 56, "mp": 13, "atk": 12, "def": 18, "spd": 6, "mov": 2},
 		"growth": {"hp": 8, "mp": 1.4, "atk": 1.9, "def": 2.6, "spd": 0.7},

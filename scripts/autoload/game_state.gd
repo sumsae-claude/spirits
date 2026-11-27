@@ -6,7 +6,7 @@ const SAVE_VERSION := 2
 ## 전투에 데려가 소환할 수 있는 계약 정령 수 (첫 번째가 선봉)
 const MAX_PARTY := 6
 ## 정령사 속성 -> 첫 계약 정령
-const STARTERS := {"fire": "emberbean", "water": "dewdrop", "earth": "pebble", "wind": "breezebird"}
+const STARTERS := {"wind": "breezebird", "fire": "emberbean", "grass": "pebble", "water": "dewdrop"}
 const STARTER_LEVEL := 3
 const DEFAULT_NAME := "리안"
 const RIVAL_NAMES := ["카렌", "도윤", "세라", "모로", "이안", "루카", "하린", "벨"]
@@ -28,7 +28,7 @@ func new_game(p_name: String, element: String) -> void:
 	summoner = Summoner.create_summoner(nm.left(8), element, STARTER_LEVEL)
 	party = [Spirit.create(str(STARTERS[element]), STARTER_LEVEL)]
 	storage = []
-	inventory = ["wood_wand", "leaf_charm"]
+	inventory = ["wood_wand", "leaf_charm", "conductor_staff", "sage_robe"]
 	battles_won = 0
 	current_encounter = []
 	save_game()

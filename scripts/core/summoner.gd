@@ -1,7 +1,7 @@
 class_name Summoner
 extends Spirit
 ## 플레이어 정령사. 정령을 소환·귀환시키고 디스펠로 야생 정령과 계약한다.
-## Spirit을 상속해 능력치/경험치/저장 로직을 그대로 쓴다. (스킬·진화 없음)
+## Spirit을 상속해 능력치/경험치/장비/저장 로직을 그대로 쓴다. (정령 스킬·진화 없음)
 ## 설정값은 data/summoner.json
 
 var element_id: String = "fire"
@@ -117,10 +117,17 @@ func to_dict() -> Dictionary:
 
 static func from_summoner_dict(d: Dictionary) -> Summoner:
 	var el := str(d.get("element", "fire"))
+	if el == "earth":
+		el = "grass"  # 흙 → 풀 변경 전 저장 데이터
 	if not GameData.ELEMENT_NAMES.has(el):
 		el = "fire"
 	var s := Summoner.create_summoner(str(d.get("nickname", "리안")), el, int(d.get("level", 1)))
 	s.xp = maxi(0, int(d.get("xp", 0)))
+	var eq = d.get("equipment", {})
+	if typeof(eq) == TYPE_DICTIONARY:
+		for slot in GameData.SLOTS:
+			var eid := str(eq.get(slot, ""))
+			s.equipment[slot] = eid if GameData.equipment.has(eid) else ""
 	var saved = d.get("skills", [])
 	if typeof(saved) == TYPE_ARRAY:
 		for sid in saved:

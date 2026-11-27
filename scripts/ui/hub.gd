@@ -37,7 +37,7 @@ func _build_list(vb: VBoxContainer) -> void:
 
 	var list := UIKit.scroll_list(vb)
 	list.add_child(UIKit.label("상성: " + GameData.element_chart_text(), 20, UIKit.GOLD))
-	list.add_child(UIKit.label("정령사", 30))
+	list.add_child(UIKit.label("정령사 (가장 중요! 쓰러지면 패배)", 28))
 	list.add_child(_summoner_card())
 	list.add_child(UIKit.label("계약 정령 (%d/%d) — 전투에서 소환 가능, ★ 선봉은 자동 소환" % [
 		GameState.party.size(), GameState.MAX_PARTY], 26))
@@ -61,12 +61,23 @@ func _build_list(vb: VBoxContainer) -> void:
 	vb.add_child(row2)
 
 
-func _summoner_card() -> Label:
+## 정령사 카드: 누르면 상세(장비 변경) 화면
+func _summoner_card() -> Button:
 	var m := GameState.summoner
-	var text := "%s\nHP %d · MP %d · 공 %d · 방 %d · 속 %d · 이동 %d   EXP %d/%d\n동시 소환 %d마리 · 디스펠 MP %d (사거리 %d)\n스킬: %s" % [
-		m.summary(), m.max_hp(), m.max_mp(), m.stat("atk"), m.stat("def"), m.stat("spd"), m.stat("mov"),
-		m.xp, m.xp_to_next(), m.summon_limit(), m.dispel_cost(), m.dispel_range(), m.skill_names()]
-	return UIKit.label(text, 22, GameData.element_color(m.element()).lightened(0.4))
+	var text := "%s\nHP %d · MP %d · 공 %d · 방 %d · 이동 %d   EXP %d/%d\n동시 소환 %d · 장비: %s / %s\n▸ 눌러서 장비 변경" % [
+		m.summary(), m.max_hp(), m.max_mp(), m.stat("atk"), m.stat("def"), m.stat("mov"),
+		m.xp, m.xp_to_next(), m.summon_limit(),
+		_equip_short(m, "weapon"), _equip_short(m, "accessory")]
+	var b := UIKit.button(text, func(): _select(m), false, 140)
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.add_theme_font_size_override("font_size", 22)
+	b.add_theme_color_override("font_color", GameData.element_color(m.element()).lightened(0.4))
+	return b
+
+
+func _equip_short(s: Spirit, slot: String) -> String:
+	var eid := str(s.equipment.get(slot, ""))
+	return str(GameData.equipment[eid]["name"]) if GameData.equipment.has(eid) else "없음"
 
 
 func _spirit_button(s: Spirit, vanguard: bool = false) -> Button:
@@ -112,6 +123,7 @@ func _on_title() -> void:
 
 func _build_detail(vb: VBoxContainer) -> void:
 	var s := selected
+	var is_summoner := s is Summoner
 	var el_color := GameData.element_color(s.element()).lightened(0.3)
 	vb.add_child(UIKit.label(s.display_name(), 44, el_color))
 	vb.add_child(UIKit.label("Lv.%d · %s 속성 · EXP %d/%d" % [
@@ -130,20 +142,29 @@ func _build_detail(vb: VBoxContainer) -> void:
 		grid.add_child(UIKit.label("%s %d" % [Spirit.STAT_NAMES[key], s.stat(key)], 26))
 	list.add_child(grid)
 
-	# 진화
-	var evo := s.next_evolution()
-	if evo.is_empty():
-		list.add_child(UIKit.label("진화: 최종 단계", 24, UIKit.MUTED))
+	if is_summoner:
+		var m: Summoner = s
+		list.add_child(UIKit.label("동시 소환 %d마리 · 디스펠 MP %d (사거리 %d) · 라운드당 MP +%d" % [
+			m.summon_limit(), m.dispel_cost(), m.dispel_range(), m.mp_regen()], 22, UIKit.MUTED))
+		list.add_child(UIKit.label("정령사 스킬", 30))
+		for o in m.skill_ids:
+			var sk: Dictionary = GameData.summoner_skills[str(o)]
+			list.add_child(UIKit.label("· %s (MP %d) — %s" % [sk["name"], int(sk["mp"]), sk.get("desc", "")], 22))
 	else:
-		list.add_child(UIKit.label("진화: Lv.%d에 %s(으)로 진화" % [
-			int(evo["level"]), GameData.species[evo["species"]]["name"]], 24, UIKit.GOLD))
+		# 진화
+		var evo := s.next_evolution()
+		if evo.is_empty():
+			list.add_child(UIKit.label("진화: 최종 단계", 24, UIKit.MUTED))
+		else:
+			list.add_child(UIKit.label("진화: Lv.%d에 %s(으)로 진화" % [
+				int(evo["level"]), GameData.species[evo["species"]]["name"]], 24, UIKit.GOLD))
 
-	# 스킬
-	list.add_child(UIKit.label("스킬", 30))
-	for sid in s.known_skills():
-		list.add_child(UIKit.label(_skill_text(sid), 22))
-	for entry in s.upcoming_skills():
-		list.add_child(UIKit.label("(Lv.%d 습득) %s" % [entry["level"], _skill_text(entry["id"])], 22, UIKit.MUTED))
+		# 스킬
+		list.add_child(UIKit.label("스킬", 30))
+		for sid in s.known_skills():
+			list.add_child(UIKit.label(_skill_text(sid), 22))
+		for entry in s.upcoming_skills():
+			list.add_child(UIKit.label("(Lv.%d 습득) %s" % [entry["level"], _skill_text(entry["id"])], 22, UIKit.MUTED))
 
 	# 장비
 	list.add_child(UIKit.label("장비", 30))
@@ -156,6 +177,10 @@ func _build_detail(vb: VBoxContainer) -> void:
 		list.add_child(b)
 		if picking_slot == slot:
 			_build_slot_picker(list, slot, eid)
+
+	if is_summoner:
+		vb.add_child(UIKit.button("뒤로", _on_back))
+		return
 
 	list.add_child(UIKit.label("소환 MP: %d%s" % [GameState.summoner.summon_cost(s),
 		" (같은 속성 할인)" if s.element() == GameState.summoner.element() else ""], 24, UIKit.MUTED))

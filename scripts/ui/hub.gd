@@ -36,6 +36,7 @@ func _build_list(vb: VBoxContainer) -> void:
 		vb.add_child(UIKit.label(message, 22, UIKit.GOOD))
 
 	var list := UIKit.scroll_list(vb)
+	list.add_child(UIKit.label("상성: " + GameData.element_chart_text(), 20, UIKit.GOLD))
 	list.add_child(UIKit.label("정령사", 30))
 	list.add_child(_summoner_card())
 	list.add_child(UIKit.label("계약 정령 (%d/%d) — 전투에서 소환 가능, ★ 선봉은 자동 소환" % [

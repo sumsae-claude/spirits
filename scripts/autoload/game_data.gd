@@ -149,10 +149,29 @@ func terrain_range_bonus(tid: String) -> int:
 ## 라운드 시작 시 최대 HP 대비 회복(+)/피해(-) 비율
 func terrain_round_hp(tid: String, el: String) -> float:
 	var t := terrain_info(tid)
+	if t.has("regen_all"):
+		return float(t["regen_all"])
 	var regen: Dictionary = t.get("regen_by", {})
 	if regen.has(el):
 		return float(regen[el])
 	return -float(t.get("burn", 0.0))
+
+
+## 라운드 시작 시 최대 MP 대비 회복 비율 (마법진)
+func terrain_round_mp(tid: String) -> float:
+	return float(terrain_info(tid).get("mp_regen_all", 0.0))
+
+
+## "불 ▶ 바람 ▶ 흙 ▶ 물 ▶ 불" (속성 색 BBCode)
+func element_chart_bbcode() -> String:
+	var parts := PackedStringArray()
+	for el in ["fire", "wind", "earth", "water", "fire"]:
+		parts.append("[color=#%s]%s[/color]" % [element_color(el).lightened(0.3).to_html(false), element_name(el)])
+	return " ▶ ".join(parts)
+
+
+func element_chart_text() -> String:
+	return "불 ▶ 바람 ▶ 흙 ▶ 물 ▶ 불 (▶ 방향으로 공격하면 1.5배, 반대는 0.75배)"
 
 
 func equipment_desc(eid: String) -> String:

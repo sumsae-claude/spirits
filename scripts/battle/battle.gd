@@ -26,7 +26,7 @@ const ENEMY_SUMMONER_KEEP_DISTANCE := 3.0
 ## 소환되지 않은 계약 정령이 받는 경험치 비율
 const BENCH_XP_RATIO := 0.3
 ## [지형 id, 덩어리 개수, 덩어리 크기] — 출발 행(0~1, 8~9)을 피해 2~7행에 배치
-const TERRAIN_PLAN := [["forest", 2, 4], ["water", 2, 3], ["hill", 2, 3], ["lava", 1, 3], ["rock", 4, 1]]
+const TERRAIN_PLAN := [["circle", 2, 1], ["forest", 2, 4], ["water", 2, 3], ["hill", 2, 3], ["lava", 1, 3], ["rock", 4, 1]]
 const TERRAIN_ROW_MIN := 2
 const TERRAIN_ROW_MAX := 7
 
@@ -39,6 +39,9 @@ const COLOR_ACTIVE_CELL := Color(0.9, 0.8, 0.3)
 const COLOR_OUTLINE := Color(0.35, 0.4, 0.5, 0.6)
 const COLOR_OWNED_RING := Color(0.75, 0.4, 0.95)
 const COLOR_INSPECT_MOVE := Color(0.95, 0.65, 0.2)
+const COLOR_ADV_GOOD := Color(0.3, 0.9, 0.4)    # 상성 유리
+const COLOR_ADV_EVEN := Color(0.95, 0.8, 0.3)   # 보통
+const COLOR_ADV_BAD := Color(0.5, 0.5, 0.58)    # 불리
 const COLOR_INSPECT_THREAT := Color(0.9, 0.25, 0.3)
 
 var grid: HexGrid
@@ -63,8 +66,11 @@ var place_cells: Dictionary = {}  # 소환할 수 있는 칸 Vector2i -> true
 var inspect_move: Dictionary = {}
 var inspect_threat: Dictionary = {}
 var _inspect_key := ""
-## 선택한 아군이 공격할 수 있는 범위 (이동 전: 이동 가능 칸 기준, 이동 후: 현재 칸 기준)
-var active_threat: Dictionary = {}
+## 선택한 아군 기준 표시용 캐시
+var preview_cell := Vector2i(-1, -1)  # 이동 미리보기 칸 (한 번 더 누르면 이동)
+var range_cells: Dictionary = {}      # 현재(또는 미리보기) 위치에서 공격이 닿는 칸 → 빨간 테두리
+var hit_now: Dictionary = {}          # 그 위치에서 바로 공격 가능한 적의 칸 → 빨간 조준
+var reach_targets: Dictionary = {}    # 이동하면 공격 가능한 적의 칸 → 주황 링
 var _active_key := ""
 var choose_target: BattleUnit = null   # 눌러서 행동 메뉴를 연 대상
 var summoning := false                 # 이번 정령사 행동에서 소환을 시작함 (연속 소환 중)
@@ -78,7 +84,7 @@ var time := 0.0
 
 var ui_root: Control
 var turn_label: Label
-var legend_label: Label
+var legend_label: RichTextLabel
 var info_label: Label
 var hint_label: Label
 var action_box: GridContainer
@@ -312,6 +318,7 @@ func _is_ready(u: BattleUnit) -> bool:
 
 func _clear_selection() -> void:
 	active = null
+	preview_cell = Vector2i(-1, -1)
 	choose_target = null
 	summoning = false
 	has_moved = false
@@ -393,13 +400,18 @@ func _start_enemy_phase() -> void:
 	_start_round()
 
 
-## 라운드 시작 시 지형 효과: 물가/용암의 회복, 용암 화상
+## 라운드 시작 시 지형 효과: 물가/용암/마법진의 회복, 용암 화상
 func _apply_round_terrain() -> void:
 	for o in units.duplicate():
 		var u: BattleUnit = o
 		if not u.is_active():
 			continue
 		var tid := grid.terrain_at(u.cell)
+		var mp_ratio := GameData.terrain_round_mp(tid)
+		if mp_ratio > 0.0 and u.spirit.mp < u.spirit.max_mp():
+			var mp_gain := mini(u.spirit.max_mp() - u.spirit.mp, maxi(1, int(round(u.spirit.max_mp() * mp_ratio))))
+			u.spirit.mp += mp_gain
+			_effect("MP+%d" % mp_gain, u.draw_pos + Vector2(0, 18), Color(0.55, 0.75, 1.0))
 		var ratio := GameData.terrain_round_hp(tid, u.spirit.element())
 		if ratio == 0.0:
 			continue
@@ -559,9 +571,20 @@ func _on_tap(pos: Vector2) -> void:
 			if summoning:
 				_inspect(u if u != active else null, c)
 			elif not has_moved and reachable.has(c):
-				_move_player(c)
+				if c == preview_cell:
+					_move_player(c)
+				else:
+					preview_cell = c
+					_mark_ui()
 			elif u == active and not has_moved:
-				_deselect()
+				if grid.in_bounds(preview_cell):
+					preview_cell = Vector2i(-1, -1)
+					_mark_ui()
+				else:
+					_deselect()
+			elif u != null and u.team != 0 and grid.in_bounds(preview_cell) and not has_moved:
+				# 미리보기 칸으로 이동한 뒤 그 적에 대한 행동 메뉴
+				_move_then_menu(preview_cell, u)
 			elif _is_ready(u) and u != active:
 				if has_moved:
 					_log("먼저 행동하거나 이동을 취소하세요.")
@@ -648,18 +671,38 @@ func _threat_from(from_cells: Dictionary, rmax: int) -> Dictionary:
 func _update_active_overlay() -> void:
 	var key := ""
 	if active != null and active.team == 0 and phase in ["player", "choose"]:
-		key = "%d:%s:%s:%d" % [active.get_instance_id(), str(active.cell), str(has_moved), reachable.size()]
+		key = "%d:%s:%s:%s:%d" % [active.get_instance_id(), str(active.cell), str(has_moved), str(preview_cell), units.size()]
 	if key == _active_key:
 		return
 	_active_key = key
-	active_threat = {}
+	range_cells = {}
+	hit_now = {}
+	reach_targets = {}
 	if key == "":
 		return
+	var rmax := _max_attack_range(active)
+	var origin_cell := preview_cell if grid.in_bounds(preview_cell) else active.cell
+	for row in ROWS:
+		for col in COLS:
+			var c := Vector2i(col, row)
+			var d := grid.distance(origin_cell, c)
+			if not grid.blocked.has(c) and d >= 1 and d <= rmax:
+				range_cells[c] = true
 	var from := {active.cell: 0}
 	if not has_moved:
 		for c in reachable:
 			from[c] = 0
-	active_threat = _threat_from(from, _max_attack_range(active))
+	for o in units:
+		var e: BattleUnit = o
+		if e.team == 0 or not e.is_active():
+			continue
+		if range_cells.has(e.cell):
+			hit_now[e.cell] = true
+		for f in from:
+			var d2 := grid.distance(f, e.cell)
+			if d2 >= 1 and d2 <= rmax:
+				reach_targets[e.cell] = true
+				break
 
 
 func _inspect(u: BattleUnit, c: Vector2i) -> void:
@@ -676,12 +719,24 @@ func _move_player(c: Vector2i) -> void:
 	inspected = null
 	inspected_cell = Vector2i(-1, -1)
 	move_origin = active.cell
+	preview_cell = Vector2i(-1, -1)
 	_mark_ui()
 	await _animate_move(active, c)
 	has_moved = true
 	reachable = {}
 	phase = "player"
 	_mark_ui()
+
+
+func _move_then_menu(c: Vector2i, t: BattleUnit) -> void:
+	await _move_player(c)
+	if phase == "player" and t.is_active():
+		_open_target_menu(t)
+
+
+func _confirm_preview_move() -> void:
+	if grid.in_bounds(preview_cell) and not has_moved:
+		_move_player(preview_cell)
 
 
 func _undo_move() -> void:
@@ -765,22 +820,29 @@ func _execute_summon(s: Spirit, cell: Vector2i) -> void:
 	reachable = {}
 	_mark_ui()
 	await get_tree().create_timer(0.3).timeout
-	if _can_summon_now():
+	var stop := _summon_stop_reason()
+	if stop == "":
 		phase = "player"
 		submenu = "summon"
 		_mark_ui()
 	else:
+		_log("더 소환할 수 없어 정령사의 행동을 마쳤다. (%s)" % stop)
 		_finish_unit()
 
 
-func _can_summon_now() -> bool:
-	if not _can_summon_more() or _free_cells_around(active.cell).is_empty():
-		return false
+## 계속 소환할 수 없는 이유. 가능하면 "".
+func _summon_stop_reason() -> String:
 	var m := GameState.summoner
+	if _summoned_count() >= m.summon_limit():
+		return "소환 한도 %d/%d" % [_summoned_count(), m.summon_limit()]
+	if _summonable().is_empty():
+		return "남은 계약 정령 없음"
+	if _free_cells_around(active.cell).is_empty():
+		return "주변에 빈 칸 없음"
 	for o in _summonable():
 		if m.mp >= m.summon_cost(o):
-			return true
-	return false
+			return ""
+	return "MP 부족"
 
 
 func _on_summon_done() -> void:
@@ -876,7 +938,28 @@ func _make_option(u: BattleUnit, t: BattleUnit, action: Dictionary, name_text: S
 		reason = "사거리 밖"
 	var title := name_text if mp_cost == 0 else "%s (MP %d)" % [name_text, mp_cost]
 	var detail := reason if reason != "" else _preview_for(u, action, t)
+	var el := _action_element(u, action)
+	if reason == "" and el != "" and t.team != u.team:
+		var mult := GameData.element_multiplier(el, t.spirit.element())
+		if mult > 1.0:
+			detail += " 유리×1.5"
+		elif mult < 1.0:
+			detail += " 불리×0.75"
 	return {"label": "%s\n%s" % [title, detail], "action": action, "ok": reason == ""}
+
+
+## 피해를 주는 행동의 속성 (피해가 없으면 "")
+func _action_element(u: BattleUnit, action: Dictionary) -> String:
+	match str(action.get("type", "")):
+		"attack":
+			return u.spirit.element()
+		"skill":
+			return str(GameData.skills[action["skill_id"]]["element"])
+		"sskill":
+			var sk: Dictionary = GameData.summoner_skills[action["skill_id"]]
+			if str(sk["type"]) == "attack":
+				return str(sk["element"])
+	return ""
 
 
 ## 대상 없이 고르는 버튼(스킬 목록 등)이 지금 쓸 수 없는 이유. 쓸 수 있으면 "".
@@ -1347,11 +1430,17 @@ func _draw() -> void:
 			draw_polyline(outline, COLOR_OUTLINE, 2.0)
 			if c == inspected_cell:
 				draw_polyline(outline, Color(0.6, 0.9, 1.0), 3.0)
+			if range_cells.has(c):
+				var inner := grid.corners(center, HEX_SIZE - 6.0)
+				inner.append(inner[0])
+				draw_polyline(inner, Color(1.0, 0.35, 0.35, 0.85), 2.5)
 
+	_draw_preview_ghost()
 	for o in units:
 		var u: BattleUnit = o
 		if u.is_active():
 			_draw_unit(u)
+	_draw_target_marks()
 
 	if phase == "targeting":
 		for tcell in targets:
@@ -1371,28 +1460,50 @@ func _cell_color(c: Vector2i) -> Color:
 	if grid.blocked.has(c):
 		return base
 	var pulse := 0.5 + 0.5 * sin(time * 6.0)
+	var adv := _advantage_color(c)
 	if phase == "targeting" and targets.has(c):
-		var tint := COLOR_ALLY_TARGET if _pending_targets_allies() else COLOR_TARGET
-		return base.lerp(tint, 0.5 + 0.2 * pulse)
+		if _pending_targets_allies():
+			return base.lerp(COLOR_ALLY_TARGET, 0.5 + 0.2 * pulse)
+		return base.lerp(adv if adv.a > 0.0 else COLOR_TARGET, 0.5 + 0.25 * pulse)
 	if phase == "choose" and choose_target != null and choose_target.cell == c:
 		var tint2 := COLOR_ALLY_TARGET if choose_target.team == 0 else COLOR_TARGET
 		return base.lerp(tint2, 0.5 + 0.2 * pulse)
+	if adv.a > 0.0 and phase in ["player", "choose", "targeting"]:
+		return base.lerp(adv, 0.45)
 	if phase == "placing" and place_cells.has(c):
 		return base.lerp(COLOR_PLACE, 0.45 + 0.2 * pulse)
 	if phase == "player" and not has_moved and reachable.has(c):
-		return base.lerp(COLOR_MOVE, 0.5)
+		return base.lerp(COLOR_MOVE, 0.85 if c == preview_cell else 0.45)
 	if active != null and active.cell == c:
 		return base.lerp(COLOR_ACTIVE_CELL, 0.35)
-	if phase in ["player", "choose"] and active_threat.has(c):
-		# 내 유닛의 공격 범위. 그 안에 적이 있으면 더 진하게.
-		var e := _unit_at(c)
-		return base.lerp(COLOR_INSPECT_THREAT, 0.5 if (e != null and e.team != 0) else 0.22)
 	if phase in ["select", "player"]:
 		if inspect_move.has(c):
 			return base.lerp(COLOR_INSPECT_MOVE, 0.4)
 		if inspect_threat.has(c):
 			return base.lerp(COLOR_INSPECT_THREAT, 0.3)
 	return base
+
+
+## 선택한 아군이 c에 있는 적을 칠 때의 상성 색: 초록 유리 / 노랑 보통 / 회색 불리. 해당 없음은 투명.
+## 대상을 고르는 중이면 그 행동의 속성 기준.
+func _advantage_color(c: Vector2i) -> Color:
+	if active == null or active.team != 0:
+		return Color(0, 0, 0, 0)
+	var e := _unit_at(c)
+	if e == null or e.team == 0:
+		return Color(0, 0, 0, 0)
+	var el := active.spirit.element()
+	if phase == "targeting":
+		var ael := _action_element(active, pending)
+		if ael == "":
+			return Color(0, 0, 0, 0)
+		el = ael
+	var mult := GameData.element_multiplier(el, e.spirit.element())
+	if mult > 1.0:
+		return COLOR_ADV_GOOD
+	if mult < 1.0:
+		return COLOR_ADV_BAD
+	return COLOR_ADV_EVEN
 
 
 ## 지형을 알아볼 수 있게 간단한 도형을 그린다. (아트 작업 전 임시)
@@ -1417,6 +1528,16 @@ func _draw_terrain_deco(tid: String, center: Vector2) -> void:
 			var glow := 0.6 + 0.4 * sin(time * 3.0)
 			for off in [Vector2(-18, -12), Vector2(17, -8), Vector2(-6, 22), Vector2(14, 18)]:
 				draw_circle(center + off, 4.0, Color(1.0, 0.5, 0.15, glow))
+		"circle":
+			var glow2 := 0.55 + 0.45 * sin(time * 2.5)
+			var ring_col := Color(0.75, 0.6, 1.0, glow2)
+			draw_arc(center, HEX_SIZE * 0.62, 0.0, TAU, 32, ring_col, 2.5)
+			draw_arc(center, HEX_SIZE * 0.42, 0.0, TAU, 32, ring_col, 1.5)
+			var star := PackedVector2Array()
+			for k in 6:
+				var ang := deg_to_rad(-90.0 + 144.0 * k)
+				star.append(center + Vector2(cos(ang), sin(ang)) * HEX_SIZE * 0.58)
+			draw_polyline(star, ring_col, 1.5)
 		"rock":
 			draw_circle(center, HEX_SIZE * 0.45, Color(0.3, 0.28, 0.25))
 			draw_circle(center + Vector2(-6, -6), HEX_SIZE * 0.18, Color(0.4, 0.37, 0.33))
@@ -1457,6 +1578,44 @@ func _draw_unit(u: BattleUnit) -> void:
 	draw_rect(bar, Color(0, 0, 0, 0.75))
 	var hp_color := Color(0.4, 0.9, 0.45) if ratio > 0.5 else (Color(0.95, 0.8, 0.3) if ratio > 0.25 else Color(0.95, 0.35, 0.3))
 	draw_rect(Rect2(bar.position, Vector2(56.0 * ratio, 6)), hp_color)
+
+
+## 이동 미리보기: 선택한 유닛이 그 칸에 섰을 때의 모습
+func _draw_preview_ghost() -> void:
+	if active == null or phase != "player" or not grid.in_bounds(preview_cell):
+		return
+	var p := grid.to_pixel(preview_cell)
+	var col := GameData.element_color(active.spirit.element())
+	col.a = 0.45
+	draw_circle(p, 28.0, col)
+	draw_arc(p, 28.0, 0.0, TAU, 40, Color(1, 1, 1, 0.7), 2.0)
+	_draw_text("여기로?", p + Vector2(0, 6), 15, Color(1, 1, 1, 0.9))
+	draw_line(active.draw_pos, p, Color(1, 1, 1, 0.35), 2.0)
+
+
+## 선택한 유닛 기준: 공격 가능한 적(빨간 조준 ⚔), 이동하면 가능한 적(주황 링), 속성 유불리
+func _draw_target_marks() -> void:
+	if active == null or active.team != 0 or not phase in ["player", "choose"]:
+		return
+	var pulse := 0.5 + 0.5 * sin(time * 6.0)
+	for o in units:
+		var e: BattleUnit = o
+		if e.team == 0 or not e.is_active():
+			continue
+		var p := e.draw_pos
+		if hit_now.has(e.cell):
+			var red := Color(1.0, 0.25, 0.25, 0.6 + 0.4 * pulse)
+			draw_arc(p, 40.0, 0.0, TAU, 40, red, 3.0)
+			for dir in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
+				draw_line(p + dir * 34.0, p + dir * 46.0, red, 3.0)
+			_draw_text("⚔", p + Vector2(0, -44), 20, Color(1.0, 0.4, 0.4))
+		elif reach_targets.has(e.cell):
+			draw_arc(p, 39.0, 0.0, TAU, 40, Color(1.0, 0.65, 0.2, 0.75), 2.0)
+		var mult := GameData.element_multiplier(active.spirit.element(), e.spirit.element())
+		if mult > 1.0:
+			_draw_text("유리", p + Vector2(30, -26), 14, Color(0.5, 1.0, 0.55))
+		elif mult < 1.0:
+			_draw_text("불리", p + Vector2(30, -26), 14, Color(0.75, 0.7, 0.75))
 
 
 func _draw_buff_marks(u: BattleUnit, p: Vector2) -> void:
@@ -1528,21 +1687,22 @@ func _build_ui() -> void:
 
 	turn_label = Label.new()
 	turn_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	turn_label.offset_top = 28
-	turn_label.offset_bottom = 76
+	turn_label.offset_top = 20
+	turn_label.offset_bottom = 64
 	turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	turn_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	turn_label.add_theme_font_size_override("font_size", 28)
 	ui_root.add_child(turn_label)
 
-	legend_label = Label.new()
+	legend_label = RichTextLabel.new()
 	legend_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	legend_label.offset_top = 78
-	legend_label.offset_bottom = 112
-	legend_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	legend_label.add_theme_font_size_override("font_size", 18)
-	legend_label.add_theme_color_override("font_color", UIKit.MUTED)
-	legend_label.text = "숲 엄폐 · 물가 물↑불↓ · 언덕 바람↑ 사거리+1 · 용암 불↑ 화상"
+	legend_label.offset_top = 66
+	legend_label.offset_bottom = 128
+	legend_label.bbcode_enabled = true
+	legend_label.scroll_active = false
+	legend_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	legend_label.add_theme_font_size_override("normal_font_size", 19)
+	legend_label.text = "[center]상성  %s   [color=#9aa3b5](▶ 방향으로 공격하면 ×1.5)[/color]\n[font_size=16][color=#9aa3b5]적 칸 색: [color=#4de566]유리[/color]/[color=#f2cc4d]보통[/color]/[color=#80808f]불리[/color] · 숲 엄폐 · 물가 물↑불↓ · 언덕 바람↑ · 용암 불↑화상 · 마법진 회복[/color][/font_size][/center]" % GameData.element_chart_bbcode()
 	ui_root.add_child(legend_label)
 
 	var panel := PanelContainer.new()
@@ -1646,11 +1806,15 @@ func _rebuild_ui() -> void:
 
 func _move_hint() -> String:
 	if has_moved:
-		return "빨간 칸 = 지금 공격 가능 범위. 적을 누르면 행동 선택. (잘못 움직였다면 '이동 취소')"
-	return "파랑 = 이동 범위, 빨강 = 공격 가능 범위. 적을 누르면 행동 선택, 자신을 누르면 선택 해제."
+		return "⚔ 빨간 조준 = 지금 공격 가능. 적을 눌러 행동 선택. (잘못 움직였다면 '이동 취소')"
+	if grid.in_bounds(preview_cell):
+		return "미리보기: 빨간 테두리 = 그 자리에서의 사거리, ⚔ = 공격 가능. 같은 칸을 다시 누르거나 적을 누르면 이동."
+	return "파란 칸을 눌러 미리보기. ⚔ = 지금 공격 가능, 주황 링 = 이동하면 공격 가능."
 
 
 func _add_common_actions() -> void:
+	if grid.in_bounds(preview_cell) and not has_moved:
+		_add_action("여기로 이동", _confirm_preview_move)
 	if has_moved:
 		_add_action("이동 취소", _undo_move)
 	else:

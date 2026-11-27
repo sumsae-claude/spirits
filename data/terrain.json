@@ -30,6 +30,11 @@
 		"burn": 0.08,
 		"desc": "불 피해 +20%, 불 정령 매 라운드 회복 · 그 외 매 라운드 8% 화상"
 	},
+	"circle": {
+		"name": "마법진", "color": [0.28, 0.22, 0.45], "passable": true, "move": 1,
+		"regen_all": 0.15, "mp_regen_all": 0.3,
+		"desc": "누구든 라운드 시작 시 HP 15%·MP 30% 회복"
+	},
 	"rock": {
 		"name": "바위", "color": [0.12, 0.12, 0.14], "passable": false, "move": 99,
 		"desc": "지나갈 수 없음"

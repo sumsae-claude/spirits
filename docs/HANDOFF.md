@@ -44,12 +44,13 @@
 ### 아트
 - 혼합형 확정: **전투=도트(32×32)**, 도감/대화/초상화=2D SD 일러스트
 - 도트 생성기 `tools/art/sprites.py` → `assets/sprites/` (목록 `art/sprites_sheet.png`)
-- 2D SD는 대표 4종만 존재: `assets/portraits/{breezebird,emberbean,pebble,dewdrop}.png` (원본 SVG `art/concepts/`, 생성 `tools/art/sd.py`)
+- 2D SD 초상화 **전체 완료**: 정령 20종 + 정령사 4종 → `assets/portraits/<종족id>.png`, `summoner_<속성>.png` (목록 `art/portraits_sheet.png`)
+  - 대표 4종 원본: `art/concepts/` (`tools/art/sd.py`), 나머지: `art/portraits_src/*.svg` (`tools/art/sd_all.py` → `tools/art/render_portraits.js`로 PNG 렌더)
 
 ## 3. 다음 할 일 (우선순위 순)
 
 1. **사용자 실행 테스트 대응** — 에러/밸런스 피드백 수정 (특히 최신 연출·반격 코드)
-2. **남은 정령 2D SD 일러스트** — 16종(진화형·다른 계열) + 수호 4 + 정령사 4를 `tools/art/sd.py` 방식으로 제작 → `assets/portraits/<종족id>.png`
+2. 2D 초상화를 **대화창(화자 얼굴)·월드맵 스테이지 정보**에도 활용 (지금은 거점 상세 화면에서만 표시)
 3. 사용자에게 제안해 둔 선택 사항 (사용자 승인 후 진행)
    - 전투 시작 전 **배치 단계** (정령사·선봉 위치 선택)
    - 보스전/필살기 한정 **전투 컷인** 연출 (설정에서 끄기)

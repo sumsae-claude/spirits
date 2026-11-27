@@ -5,7 +5,8 @@ extends Node2D
 ##  - 정령사: (이동) → 소환 / 귀환 / 디스펠 / 공격 / 대기 / 후퇴
 ##  - 정령:   (이동) → 공격 / 스킬 / 귀환 / 대기   ※ 소환된 다음 라운드부터 행동
 ## 라운드마다 속도 순으로 행동한다.
-## 정령사가 쓰러지면 패배, 야생 정령을 모두 쓰러뜨리거나 계약하면 승리.
+## 상대는 야생 정령 무리, 또는 정령을 소환하는 적 정령사.
+## 정령사가 쓰러지면 패배. 적을 모두 쓰러뜨리거나 계약하면, 또는 적 정령사를 쓰러뜨리면 승리.
 
 const COLS := 8
 const ROWS := 10
@@ -17,6 +18,10 @@ const ACTION_DELAY := 0.55
 const ENEMY_SPAWN_COLS := [3, 4, 2, 5]
 const SUMMONER_CELL := Vector2i(3, 9)   # 맨 아래 행
 const VANGUARD_CELL := Vector2i(3, 8)   # 정령사 바로 위
+const ENEMY_SUMMONER_CELL := Vector2i(4, 0)  # 맨 위 행
+const ENEMY_VANGUARD_CELL := Vector2i(4, 1)  # 적 정령사 바로 아래
+## 적 정령사가 아군과 유지하려는 거리
+const ENEMY_SUMMONER_KEEP_DISTANCE := 3.0
 ## 소환되지 않은 계약 정령이 받는 경험치 비율
 const BENCH_XP_RATIO := 0.3
 ## [지형 id, 덩어리 개수, 덩어리 크기] — 출발 행(0~1, 8~9)을 피해 2~7행에 배치
@@ -31,6 +36,7 @@ const COLOR_ALLY_TARGET := Color(0.3, 0.85, 0.75)
 const COLOR_PLACE := Color(0.55, 0.85, 1.0)
 const COLOR_ACTIVE_CELL := Color(0.9, 0.8, 0.3)
 const COLOR_OUTLINE := Color(0.35, 0.4, 0.5, 0.6)
+const COLOR_OWNED_RING := Color(0.75, 0.4, 0.95)
 
 var grid: HexGrid
 var units: Array = []        # 전장에 있는 BattleUnit (귀환하면 빠진다)
@@ -38,6 +44,8 @@ var turn_queue: Array = []   # 이번 라운드 행동 순서
 var turn_index := -1
 var round_num := 0
 var summoner_unit: BattleUnit = null
+var enemy_summoner_unit: BattleUnit = null  # 정령사 대결일 때만
+var enemy_bench: Array = []                 # 적 정령사가 아직 소환하지 않은 정령
 var active: BattleUnit = null
 var inspected: BattleUnit = null
 var inspected_cell := Vector2i(-1, -1)  # 유닛 없는 칸을 눌렀을 때 지형 정보 표시용
@@ -100,7 +108,7 @@ func _setup_units() -> void:
 		GameState.summoner = Summoner.create_summoner(GameState.DEFAULT_NAME, "fire", 5)
 	if GameState.party.is_empty():
 		GameState.party = [Spirit.create("emberbean", 5), Spirit.create("dewdrop", 4)]
-	if GameState.current_encounter.is_empty():
+	if GameState.current_encounter.is_empty() and GameState.current_rival.is_empty():
 		GameState.current_encounter = GameState.make_encounter()
 
 	_generate_terrain()
@@ -108,11 +116,26 @@ func _setup_units() -> void:
 	summoner_unit.is_summoner = true
 	var bench := _summonable()
 	if not bench.is_empty():
-		_summon(bench[0], VANGUARD_CELL, false)
-	for i in GameState.current_encounter.size():
-		_add_unit(GameState.current_encounter[i], 1, Vector2i(ENEMY_SPAWN_COLS[i], 1))
-	_log("야생 정령 %d마리가 나타났다!" % GameState.current_encounter.size())
+		_summon(bench[0], VANGUARD_CELL, false, 0)
+
+	if not GameState.current_rival.is_empty():
+		_setup_rival(GameState.current_rival)
+	else:
+		for i in GameState.current_encounter.size():
+			_add_unit(GameState.current_encounter[i], 1, Vector2i(ENEMY_SPAWN_COLS[i], 1))
+		_log("야생 정령 %d마리가 나타났다!" % GameState.current_encounter.size())
 	GameState.current_encounter = []
+	GameState.current_rival = {}
+
+
+func _setup_rival(rival: Dictionary) -> void:
+	var m: Summoner = rival["summoner"]
+	enemy_summoner_unit = _add_unit(m, 1, ENEMY_SUMMONER_CELL)
+	enemy_summoner_unit.is_summoner = true
+	enemy_bench = (rival["party"] as Array).duplicate()
+	_log("%s의 정령사 %s이(가) 승부를 걸어왔다!" % [GameData.element_name(m.element()), m.display_name()])
+	if not enemy_bench.is_empty():
+		_summon(enemy_bench[0], ENEMY_VANGUARD_CELL, false, 1)
 
 
 func _generate_terrain() -> void:
@@ -182,17 +205,21 @@ func _field_unit_of(s: Spirit) -> BattleUnit:
 	return null
 
 
-func _summoned_count() -> int:
+func _summoned_count(team: int = 0) -> int:
 	var n := 0
 	for o in units:
 		var u: BattleUnit = o
-		if u.team == 0 and not u.is_summoner and u.is_active():
+		if u.team == team and not u.is_summoner and u.is_active():
 			n += 1
 	return n
 
 
 func _can_summon_more() -> bool:
 	return _summoned_count() < GameState.summoner.summon_limit() and not _summonable().is_empty()
+
+
+func _summoner_of(team: int) -> BattleUnit:
+	return summoner_unit if team == 0 else enemy_summoner_unit
 
 
 ## 정령사 주변의 빈 칸
@@ -205,14 +232,19 @@ func _free_cells_around(c: Vector2i) -> Dictionary:
 	return result
 
 
-func _summon(s: Spirit, cell: Vector2i, pay: bool) -> BattleUnit:
+func _summon(s: Spirit, cell: Vector2i, pay: bool, team: int) -> BattleUnit:
+	var m: Summoner = _summoner_of(team).spirit
 	if pay:
-		var m := GameState.summoner
 		m.mp = maxi(0, m.mp - m.summon_cost(s))
-	var u := _add_unit(s, 0, cell)
-	if not participated.has(s):
-		participated.append(s)
-	_log("%s을(를) 소환했다! (다음 라운드부터 행동)" % s.display_name())
+	var u := _add_unit(s, team, cell)
+	if team == 0:
+		if not participated.has(s):
+			participated.append(s)
+		_log("%s을(를) 소환했다! (다음 라운드부터 행동)" % s.display_name())
+	else:
+		u.owned = true
+		enemy_bench.erase(s)
+		_log("적 정령사 %s이(가) %s을(를) 소환했다!" % [m.display_name(), s.display_name()])
 	_effect("소환!", u.draw_pos, COLOR_PLACE)
 	return u
 
@@ -236,7 +268,7 @@ func _start_round() -> void:
 		if u.is_active():
 			turn_queue.append(u)
 			if round_num > 1:
-				var regen := GameState.summoner.mp_regen() if u.is_summoner else BattleLogic.MP_REGEN_PER_ROUND
+				var regen := (u.spirit as Summoner).mp_regen() if u.is_summoner else BattleLogic.MP_REGEN_PER_ROUND
 				u.spirit.mp = mini(u.spirit.max_mp(), u.spirit.mp + regen)
 	turn_queue.sort_custom(_compare_speed)
 	turn_index = -1
@@ -299,7 +331,10 @@ func _next_turn() -> void:
 		_mark_ui()
 	else:
 		reachable = {}
-		_run_enemy_turn()
+		if active.is_summoner:
+			_run_enemy_summoner_turn()
+		else:
+			_run_enemy_turn()
 
 
 func _end_turn() -> void:
@@ -317,6 +352,9 @@ func _check_end() -> bool:
 		return true
 	if not summoner_unit.is_active():
 		_finish(false)
+		return true
+	if enemy_summoner_unit != null and not enemy_summoner_unit.is_active():
+		_finish(true)
 		return true
 	for o in units:
 		var u: BattleUnit = o
@@ -336,6 +374,11 @@ func _finish(victory: bool) -> void:
 			total_xp += BattleLogic.xp_reward(s)
 		for s in captured:
 			total_xp += BattleLogic.xp_reward(s)
+		var beat_rival := enemy_summoner_unit != null and not enemy_summoner_unit.is_active()
+		if beat_rival:
+			var bonus := BattleLogic.xp_reward(enemy_summoner_unit.spirit) * 2
+			total_xp += bonus
+			lines.append("적 정령사 %s을(를) 쓰러뜨렸다! (보너스 경험치 %d)" % [enemy_summoner_unit.spirit.display_name(), bonus])
 		lines.append("획득 경험치 %d (소환하지 않은 정령은 %d%%)" % [total_xp, int(BENCH_XP_RATIO * 100)])
 		lines.append_array(GameState.summoner.gain_xp(total_xp))
 		for o in GameState.party:
@@ -346,7 +389,7 @@ func _finish(victory: bool) -> void:
 			var s: Spirit = o
 			var where := GameState.add_captured(s)
 			lines.append("%s 계약 완료 → %s" % [s.display_name(), where])
-		if rng.randf() < 0.4:
+		if beat_rival or rng.randf() < 0.4:
 			var eid := GameData.random_equipment(rng)
 			GameState.inventory.append(eid)
 			lines.append("장비 획득: %s" % GameData.equipment_desc(eid))
@@ -507,7 +550,7 @@ func _execute_summon(s: Spirit, cell: Vector2i) -> void:
 	phase = "busy"
 	pending = {}
 	place_cells = {}
-	_summon(s, cell, true)
+	_summon(s, cell, true, 0)
 	_mark_ui()
 	await get_tree().create_timer(ACTION_DELAY).timeout
 	_end_turn()
@@ -587,6 +630,8 @@ func _targets_for(u: BattleUnit, from_cell: Vector2i, action: Dictionary) -> Dic
 		var other: BattleUnit = o
 		if not other.is_active() or other.team == u.team:
 			continue
+		if kind == "dispel" and other.is_summoner:
+			continue  # 정령사는 디스펠할 수 없다
 		var d := grid.distance(from_cell, other.cell)
 		if d >= rmin and d <= rmax:
 			result[other.cell] = other
@@ -638,18 +683,34 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 func _knock_out(target: BattleUnit) -> void:
 	target.alive = false
 	_log("%s이(가) 쓰러졌다!" % target.spirit.display_name())
-	if target.team == 1:
+	if target.team != 1:
+		return
+	if not target.is_summoner:
 		defeated.append(target.spirit)
+		return
+	# 적 정령사가 쓰러지면 그 정령들은 계약이 풀려 흩어진다
+	var fled := 0
+	for o in units:
+		var u: BattleUnit = o
+		if u.owned and u.is_active():
+			u.recalled = true
+			_effect("도주", u.draw_pos, COLOR_OWNED_RING)
+			fled += 1
+	if fled > 0:
+		_log("주인을 잃은 정령 %d마리가 흩어졌다." % fled)
 
 
 func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
-	var chance := BattleLogic.dispel_chance(u.spirit, target.spirit)
+	var chance := BattleLogic.dispel_chance(u.spirit, target.spirit, target.owned)
 	var pct := int(round(chance * 100.0))
 	_log("%s이(가) 디스펠을 시도했다... (성공률 %d%%)" % [u.spirit.display_name(), pct])
 	if rng.randf() < chance:
 		target.captured = true
 		captured.append(target.spirit)
-		_log("디스펠 성공! %s과(와) 계약했다!" % target.spirit.display_name())
+		if target.owned:
+			_log("디스펠 성공! %s을(를) 적 정령사에게서 빼앗아 계약했다!" % target.spirit.display_name())
+		else:
+			_log("디스펠 성공! %s과(와) 계약했다!" % target.spirit.display_name())
 		_effect("계약!", target.draw_pos, Color(0.5, 1.0, 0.7))
 	else:
 		_log("디스펠 실패! %s이(가) 저항했다." % target.spirit.display_name())
@@ -677,6 +738,97 @@ func _run_enemy_turn() -> void:
 	if plan.has("action"):
 		await _perform(u, plan["action"], plan["target"])
 	_end_turn()
+
+
+## 적 정령사의 차례: 아군과 거리를 두고 자리를 잡은 뒤, 소환할 수 있으면 소환하고
+## 아니면 옆에 있는 적을 공격한다.
+func _run_enemy_summoner_turn() -> void:
+	phase = "enemy"
+	_mark_ui()
+	await get_tree().create_timer(ENEMY_DELAY).timeout
+	var u := active
+	var m: Summoner = u.spirit
+	var want_summon := not _enemy_summon_choices(m).is_empty()
+
+	var cells := _reachable_for(u)
+	cells[u.cell] = 0
+	var best_cell := u.cell
+	var best_score := -INF
+	for cell in cells:
+		var d := float(_nearest_foe_distance(u, cell))
+		var score := -absf(minf(d, 6.0) - ENEMY_SUMMONER_KEEP_DISTANCE) * 2.0
+		if d <= 1.0:
+			score -= 6.0
+		score += _terrain_score(u, cell) * 0.5
+		score -= int(cells[cell]) * 0.2
+		if want_summon and _free_cells_around(cell).is_empty():
+			score -= 10.0
+		if score > best_score:
+			best_score = score
+			best_cell = cell
+	if best_cell != u.cell:
+		await _animate_move(u, best_cell)
+
+	if want_summon:
+		var place := _enemy_place_cell(u)
+		if place.x >= 0:
+			_summon(_pick_enemy_summon(m), place, true, 1)
+			await get_tree().create_timer(ACTION_DELAY).timeout
+			_end_turn()
+			return
+
+	var t := _targets_for(u, u.cell, {"type": "attack"})
+	if not t.is_empty():
+		var target: BattleUnit = null
+		for tcell in t:
+			var cand: BattleUnit = t[tcell]
+			if target == null or cand.spirit.hp < target.spirit.hp:
+				target = cand
+		await _perform(u, {"type": "attack"}, target)
+	else:
+		_log("적 정령사 %s은(는) 상황을 살피고 있다." % m.display_name())
+	_end_turn()
+
+
+## 적 정령사가 지금 MP로 소환할 수 있는 정령들
+func _enemy_summon_choices(m: Summoner) -> Array:
+	if _summoned_count(1) >= m.summon_limit():
+		return []
+	var result := []
+	for o in enemy_bench:
+		var s: Spirit = o
+		if s.hp > 0 and m.mp >= m.summon_cost(s):
+			result.append(s)
+	return result
+
+
+## 아군 전장 정령들에게 속성이 유리한 정령을 고른다.
+func _pick_enemy_summon(m: Summoner) -> Spirit:
+	var best: Spirit = null
+	var best_score := -INF
+	for o in _enemy_summon_choices(m):
+		var s: Spirit = o
+		var score := float(s.level) * 0.2
+		for p in units:
+			var ally: BattleUnit = p
+			if ally.team == 0 and ally.is_active():
+				score += GameData.element_multiplier(s.element(), ally.spirit.element()) - 1.0
+		if score > best_score:
+			best_score = score
+			best = s
+	return best
+
+
+## 적 정령사 옆 빈 칸 중 아군에 가장 가까운 칸. 없으면 (-1, -1).
+func _enemy_place_cell(u: BattleUnit) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_d := 9999
+	for c in _free_cells_around(u.cell):
+		var d := _nearest_foe_distance(u, c)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
 
 
 ## 이동 가능한 모든 칸 × 모든 행동 × 모든 대상 중 점수가 가장 높은 조합을 고른다.
@@ -840,12 +992,12 @@ func _draw_unit(u: BattleUnit) -> void:
 		draw_colored_polygon(body, el_color.darkened(0.5))
 		var edge := body.duplicate()
 		edge.append(body[0])
-		draw_polyline(edge, Color(1.0, 0.85, 0.4), 3.0)
+		draw_polyline(edge, Color(1.0, 0.85, 0.4) if u.team == 0 else Color(0.95, 0.3, 0.35), 3.0)
 	else:
-		var ring := Color(0.95, 0.95, 1.0) if u.team == 0 else Color(0.9, 0.2, 0.25)
+		var ring := Color(0.95, 0.95, 1.0) if u.team == 0 else (COLOR_OWNED_RING if u.owned else Color(0.9, 0.2, 0.25))
 		draw_circle(p, 30.0, el_color.darkened(0.2))
 		draw_arc(p, 30.0, 0.0, TAU, 40, ring, 3.0)
-		if u.team == 0 and u.joined_round >= round_num:
+		if u.joined_round >= round_num and (u.team == 0 or u.owned):
 			# 이번 라운드에 소환되어 아직 행동하지 못하는 정령
 			draw_arc(p, 34.0, 0.0, TAU, 40, Color(0.55, 0.85, 1.0, 0.5), 2.0)
 	_draw_text(u.spirit.display_name(), p + Vector2(0, 2), 16, Color.WHITE)
@@ -868,7 +1020,7 @@ func _draw_text(text: String, pos: Vector2, size: int, color: Color) -> void:
 func _preview_text(t: BattleUnit) -> String:
 	match str(pending.get("type", "")):
 		"dispel":
-			return "%d%%" % int(round(BattleLogic.dispel_chance(active.spirit, t.spirit) * 100.0))
+			return "%d%%" % int(round(BattleLogic.dispel_chance(active.spirit, t.spirit, t.owned) * 100.0))
 		"skill":
 			var sk: Dictionary = GameData.skills[pending["skill_id"]]
 			return "-%d" % _damage(active, active.cell, t, int(sk["power"]), str(sk["element"]), false)
@@ -958,7 +1110,7 @@ func _rebuild_ui() -> void:
 		c.queue_free()
 
 	if active != null:
-		var who := "정령사" if active.is_summoner else ("아군" if active.team == 0 else "야생")
+		var who := _unit_tag(active)
 		turn_label.text = "라운드 %d · %s %s의 차례" % [round_num, who, active.spirit.display_name()]
 	elif phase == "over":
 		turn_label.text = "전투 종료"
@@ -980,7 +1132,7 @@ func _rebuild_ui() -> void:
 			_add_action("취소", _cancel_targeting)
 			match str(pending.get("type", "")):
 				"dispel":
-					hint_label.text = "계약할 야생 정령을 누르세요. (숫자 = 성공 확률)"
+					hint_label.text = "계약할 정령을 누르세요. (숫자 = 성공 확률, 적 정령사의 정령은 더 어려움)"
 				"recall":
 					hint_label.text = "귀환시킬 정령을 누르세요."
 				_:
@@ -989,7 +1141,7 @@ func _rebuild_ui() -> void:
 			_add_action("취소", _cancel_targeting)
 			hint_label.text = "%s을(를) 소환할 칸을 누르세요." % (pending["spirit"] as Spirit).display_name()
 		"enemy":
-			hint_label.text = "야생 정령이 움직이고 있다..."
+			hint_label.text = "적이 움직이고 있다..."
 		_:
 			hint_label.text = ""
 
@@ -1045,15 +1197,23 @@ func _unit_info(u: BattleUnit) -> String:
 	if u == null:
 		return ""
 	var s := u.spirit
-	var tag := "정령사" if u.is_summoner else ("아군" if u.team == 0 else "야생")
+	var tag := _unit_tag(u)
 	var extra := ""
 	if u.is_summoner:
-		extra = "   소환 %d/%d" % [_summoned_count(), GameState.summoner.summon_limit()]
+		extra = "   소환 %d/%d" % [_summoned_count(u.team), (s as Summoner).summon_limit()]
 	return "[%s] %s  Lv.%d  %s 속성\nHP %d/%d  MP %d/%d  공%d 방%d 속%d 이동%d%s\n%s" % [
 		tag, s.display_name(), s.level, GameData.element_name(s.element()),
 		s.hp, s.max_hp(), s.mp, s.max_mp(),
 		s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"), extra,
 		_terrain_line(u.cell)]
+
+
+func _unit_tag(u: BattleUnit) -> String:
+	if u.team == 0:
+		return "정령사" if u.is_summoner else "아군"
+	if u.is_summoner:
+		return "적 정령사"
+	return "적 정령" if u.owned else "야생"
 
 
 func _terrain_line(c: Vector2i) -> String:

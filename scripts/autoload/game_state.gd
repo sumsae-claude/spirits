@@ -9,6 +9,7 @@ const MAX_PARTY := 6
 const STARTERS := {"fire": "emberbean", "water": "dewdrop", "earth": "pebble", "wind": "breezebird"}
 const STARTER_LEVEL := 3
 const DEFAULT_NAME := "리안"
+const RIVAL_NAMES := ["카렌", "도윤", "세라", "모로", "이안", "루카", "하린", "벨"]
 
 var summoner: Summoner = null
 var party: Array = []      # Spirit
@@ -16,6 +17,7 @@ var storage: Array = []    # Spirit
 var inventory: Array = []  # 장착하지 않은 장비 id
 var battles_won: int = 0
 var current_encounter: Array = []  # 다음 전투에 나올 야생 정령 (Spirit)
+var current_rival: Dictionary = {}  # 다음 전투의 적 정령사 {"summoner": Summoner, "party": [Spirit]}
 
 
 func new_game(p_name: String, element: String) -> void:
@@ -182,7 +184,28 @@ func make_encounter() -> Array:
 	return enemies
 
 
-func start_battle() -> void:
-	current_encounter = make_encounter()
+## 적 정령사: 평균 레벨 +1, 계약 정령 2~4마리 (첫 정령은 같은 속성 = 선봉)
+func make_rival() -> Dictionary:
+	var avg := average_party_level()
+	var elements: Array = GameData.ELEMENT_NAMES.keys()
+	var el := str(elements.pick_random())
+	var m := Summoner.create_summoner(str(RIVAL_NAMES.pick_random()), el, avg + 1)
+	var pool := GameData.wild_pool()
+	var same: Array = pool.filter(func(sid): return GameData.species[sid]["element"] == el)
+	var spirits := [Spirit.create(str(same.pick_random()), avg)]
+	var count := mini(4, 2 + floori(battles_won / 3.0))
+	for i in count - 1:
+		spirits.append(Spirit.create(str(pool.pick_random()), maxi(1, avg + randi_range(-1, 1))))
+	return {"summoner": m, "party": spirits}
+
+
+## kind: "wild" = 야생 정령 무리, "rival" = 적 정령사와 대결
+func start_battle(kind: String = "wild") -> void:
+	current_encounter = []
+	current_rival = {}
+	if kind == "rival":
+		current_rival = make_rival()
+	else:
+		current_encounter = make_encounter()
 	heal_all()
 	get_tree().change_scene_to_file("res://scenes/battle.tscn")

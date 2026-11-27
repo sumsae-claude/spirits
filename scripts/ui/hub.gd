@@ -48,10 +48,14 @@ func _build_list(vb: VBoxContainer) -> void:
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
-	row.add_child(UIKit.button("탐험 출발", _on_explore))
-	row.add_child(UIKit.button("저장", _on_save))
-	row.add_child(UIKit.button("타이틀", _on_title))
+	row.add_child(UIKit.button("야생 탐험", _on_explore))
+	row.add_child(UIKit.button("정령사 대결", _on_rival))
 	vb.add_child(row)
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 12)
+	row2.add_child(UIKit.button("저장", _on_save, false, 64))
+	row2.add_child(UIKit.button("타이틀", _on_title, false, 64))
+	vb.add_child(row2)
 
 
 func _summoner_card() -> Label:
@@ -82,7 +86,12 @@ func _select(s: Spirit) -> void:
 
 func _on_explore() -> void:
 	GameState.save_game()
-	GameState.start_battle()
+	GameState.start_battle("wild")
+
+
+func _on_rival() -> void:
+	GameState.save_game()
+	GameState.start_battle("rival")
 
 
 func _on_save() -> void:

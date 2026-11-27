@@ -10,6 +10,7 @@ var alive := true
 var captured := false
 var recalled := false      # 정령사 곁으로 귀환함 (전장에서 빠짐)
 var is_summoner := false
+var owned := false         # 적 정령사가 소환한 정령 (주인이 있음)
 var joined_round := 0      # 전장에 나온 라운드 (그 라운드에는 행동하지 않음)
 
 

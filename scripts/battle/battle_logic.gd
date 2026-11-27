@@ -6,6 +6,8 @@ const BASIC_ATTACK_POWER := 40
 const BASIC_ATTACK_RANGE := 1
 ## 디스펠 사거리/MP는 data/summoner.json (정령사 전용)
 const MP_REGEN_PER_ROUND := 2
+## 다른 정령사와 계약된 정령은 디스펠하기 어렵다
+const OWNED_DISPEL_MULT := 0.6
 
 
 ## 피해량 = 공격 × (위력/40) × 20/(20+방어) × 속성배율 × 지형배율 × 난수(0.9~1.1)
@@ -26,12 +28,14 @@ static func calc_damage(attacker: Spirit, defender: Spirit, power: int, element:
 
 ## 디스펠(계약) 성공 확률.
 ## 대상 체력이 낮을수록, 시전자 레벨이 높을수록, 속성이 유리할수록 높다.
-static func dispel_chance(caster: Spirit, target: Spirit) -> float:
+static func dispel_chance(caster: Spirit, target: Spirit, owned: bool = false) -> float:
 	var hp_ratio := float(target.hp) / float(maxi(1, target.max_hp()))
 	var chance := 0.15 + (1.0 - hp_ratio) * 0.6 + float(caster.level - target.level) * 0.04
 	if GameData.STRONG_AGAINST.get(caster.element(), "") == target.element():
 		chance += 0.1
 	chance *= float(target.species().get("catch", 1.0))
+	if owned:
+		chance *= OWNED_DISPEL_MULT
 	return clampf(chance, 0.05, 0.95)
 
 

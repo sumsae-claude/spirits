@@ -15,6 +15,9 @@ var _hp_labels := [null, null]
 var _heads := [null, null]
 var _home := [Vector2.ZERO, Vector2.ZERO]
 var _max_hp := [1, 1]
+var _mp_bars := [null, null]
+var _mp_labels := [null, null]
+var _max_mp := [1, 1]
 
 
 static func open(parent: Control, left: Spirit, right: Spirit, bg: Texture2D, left_col: Color, right_col: Color) -> DuelView:
@@ -96,7 +99,7 @@ func _build(left: Spirit, right: Spirit, bg: Texture2D, left_col: Color, right_c
 		var bar_bg := ColorRect.new()
 		bar_bg.color = Color(0, 0, 0, 0.7)
 		bar_bg.size = Vector2(170, 14)
-		bar_bg.position = Vector2(home.x - 29.0, FIELD_H - 34.0)
+		bar_bg.position = Vector2(home.x - 29.0, FIELD_H - 44.0)
 		_field.add_child(bar_bg)
 		var bar := ColorRect.new()
 		bar.color = Color(0.4, 0.9, 0.45)
@@ -105,11 +108,29 @@ func _build(left: Spirit, right: Spirit, bg: Texture2D, left_col: Color, right_c
 		_field.add_child(bar)
 		_bars[i] = bar
 		var hl := _lbl("", 16, cols[i])
-		hl.position = Vector2(home.x - 29.0, FIELD_H - 58.0)
+		hl.position = Vector2(home.x - 29.0, FIELD_H - 68.0)
 		_field.add_child(hl)
 		_hp_labels[i] = hl
 		_max_hp[i] = maxi(1, s.max_hp())
 		_set_hp(i, s.hp)
+		# MP 막대 (스킬을 쓰면 줄어든다)
+		var mbg := ColorRect.new()
+		mbg.color = Color(0, 0, 0, 0.7)
+		mbg.size = Vector2(170, 10)
+		mbg.position = Vector2(home.x - 29.0, FIELD_H - 26.0)
+		_field.add_child(mbg)
+		var mbar := ColorRect.new()
+		mbar.color = Color(0.45, 0.65, 1.0)
+		mbar.size = Vector2(170, 10)
+		mbar.position = mbg.position
+		_field.add_child(mbar)
+		_mp_bars[i] = mbar
+		var ml := _lbl("", 14, Color(0.7, 0.8, 1.0))
+		ml.position = Vector2(home.x + 146.0, FIELD_H - 32.0)
+		_field.add_child(ml)
+		_mp_labels[i] = ml
+		_max_mp[i] = maxi(1, s.max_mp())
+		_set_mp(i, s.mp)
 	var tip := UIKit.label("화면을 누르면 넘김 · '?'에서 연출 끄기", 15, UIKit.MUTED)
 	vb.add_child(tip)
 
@@ -130,6 +151,25 @@ func _set_hp(i: int, hp: int) -> void:
 	(_bars[i] as ColorRect).size.x = 170.0 * r
 	(_bars[i] as ColorRect).color = Color(0.4, 0.9, 0.45) if r > 0.5 else (Color(1.0, 0.8, 0.3) if r > 0.25 else Color(1.0, 0.35, 0.3))
 	(_hp_labels[i] as Label).text = "HP %d/%d" % [maxi(0, hp), _max_hp[i]]
+
+
+func _set_mp(i: int, mp: int) -> void:
+	(_mp_bars[i] as ColorRect).size.x = 170.0 * clampf(float(mp) / float(_max_mp[i]), 0.0, 1.0)
+	(_mp_labels[i] as Label).text = "MP %d" % maxi(0, mp)
+
+
+## 스킬 MP 소비: 이전 값에서 줄어드는 모습 + "MP-5"
+func spend_mp(side: int, before: int, after: int) -> void:
+	_set_mp(side, before)
+	if skip:
+		_set_mp(side, after)
+		return
+	var bar: ColorRect = _mp_bars[side]
+	var tw := create_tween()
+	tw.tween_property(bar, "size:x", 170.0 * clampf(float(after) / float(_max_mp[side]), 0.0, 1.0), 0.3)
+	_float(side, "MP-%d" % (before - after), Color(0.55, 0.75, 1.0), 24, 40.0)
+	await _wait(0.3)
+	_set_mp(side, after)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -194,11 +234,11 @@ func _spark(at: Vector2, col: Color) -> void:
 		tw.chain().tween_callback(p.queue_free)
 
 
-func _float(side: int, text: String, col: Color, size: int = 34) -> void:
+func _float(side: int, text: String, col: Color, size: int = 34, dy: float = 0.0) -> void:
 	var l := _lbl(text, size, col)
 	l.add_theme_constant_override("outline_size", 6)
 	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	l.position = _home[side] + Vector2(20, -10)
+	l.position = _home[side] + Vector2(20, -10 + dy)
 	_field.add_child(l)
 	var tw := create_tween()
 	tw.set_parallel(true)

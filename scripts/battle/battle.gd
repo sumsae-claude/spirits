@@ -1249,7 +1249,7 @@ func _show_attack_confirm() -> void:
 	var action: Dictionary = opts[confirm_pick]["action"] if confirm_pick < opts.size() else {"type": "attack"}
 	if _is_tab_attack(action):
 		var resp := _predict_response(u, t, action)
-		var rtext := "방어\n피해 절반 · 회피↑" if resp == "defend" else "반격 — 기본 공격\n명중%d%% 피해 %d" % [int(_hit_chance(t, u, {"type": "attack"}, false)), _counter_damage(t, u, false)]
+		var rtext := "방어\n피해 절반 · 회피↑" if resp == "defend" else "반격 — 기본 공격\n명중 %d%% · 피해 %d" % [int(_hit_chance(t, u, {"type": "attack"}, false)), _counter_damage(t, u, false)]
 		if resp == "counter" and _expected_damage(u, u.cell, t, action) >= t.spirit.hp:
 			rtext = "반격 (쓰러지면 못 함)"
 		right.add_child(_window_button(rtext, Callable(), true, true))
@@ -1288,7 +1288,12 @@ func _action_detail(u: BattleUnit, t: BattleUnit, action: Dictionary) -> String:
 		"dispel":
 			return "GET 성공 %d%%" % int(round(_dispel_chance(u, t) * 100.0))
 	if _is_tab_attack(action):
-		var txt := "명중%d%% 피해 %d" % [int(_hit_chance(u, t, action, false)), _expected_damage(u, u.cell, t, action)]
+		# 상대가 방어할 것 같으면 방어 기준 (가운데 화살표와 같은 숫자)
+		var def := _predict_response(u, t, action) == "defend"
+		var d := _expected_damage(u, u.cell, t, action)
+		if def and str(action.get("type", "")) != "sskill":
+			d = maxi(1, int(round(d * BattleLogic.DEFEND_MULT)))
+		var txt := "명중 %d%% · 피해 %d" % [int(_hit_chance(u, t, action, def)), d]
 		var el := _action_element(u, action)
 		var mult := GameData.element_multiplier(el, t.spirit.element())
 		if mult > 1.0:
@@ -1328,31 +1333,39 @@ func _compare_card(u: BattleUnit, t: BattleUnit, action: Dictionary, resp: Strin
 		if resp == "counter" and dmg < t.spirit.hp and _can_counter(t, u):
 			c_dmg = _counter_damage(t, u, false)
 			c_hit = int(_hit_chance(t, u, {"type": "attack"}, false))
-	row.add_child(_compare_side(u, c_dmg))
+	row.add_child(_compare_side(u, c_dmg, _action_mp(u, action)))
 	var mid := VBoxContainer.new()
 	mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	mid.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_child(mid)
 	mid.add_child(UIKit.label("사거리 %d" % grid.distance(u.cell, t.cell), 17, UIKit.MUTED, true))
+	var me_col := Color(1.0, 0.45, 0.4)
+	var foe_col := Color(0.4, 0.65, 1.0)
 	if kind == "dispel":
-		mid.add_child(UIKit.label("GET!  %d%%" % int(round(_dispel_chance(u, t) * 100.0)), 30, UIKit.GOLD, true))
+		var dc := int(round(_dispel_chance(u, t) * 100.0))
+		mid.add_child(UIKit.label("디스펠 (내 공격) →", 16, me_col.lightened(0.3), true))
+		mid.add_child(HitArrow.make(dc, true, UIKit.GOLD.darkened(0.2), "성공 %d%%" % dc))
 	elif _is_tab_attack(action):
-		mid.add_child(UIKit.label("▶ %d%%  %d" % [hit, dmg], 30, Color(1.0, 0.5, 0.45), true))
+		mid.add_child(UIKit.label("내 공격 →", 16, me_col.lightened(0.3), true))
+		mid.add_child(HitArrow.make(hit, true, me_col, "명중 %d%% · 피해 %d" % [hit, dmg]))
+		mid.add_child(UIKit.label("← 상대 반격", 16, foe_col.lightened(0.3), true))
 		if c_dmg > 0:
-			mid.add_child(UIKit.label("%d  %d%% ◀" % [c_dmg, c_hit], 24, Color(0.6, 0.85, 1.0), true))
+			mid.add_child(HitArrow.make(c_hit, false, foe_col, "명중 %d%% · 피해 %d" % [c_hit, c_dmg]))
 		elif resp == "defend":
-			mid.add_child(UIKit.label("방어", 22, Color(0.6, 0.85, 1.0), true))
+			mid.add_child(HitArrow.make(0, false, foe_col, "방어 (반격 없음)"))
+		else:
+			mid.add_child(HitArrow.make(0, false, foe_col, "반격 없음"))
 		var gu := _terrain_grade(u)
 		var gt := _terrain_grade(t)
 		mid.add_child(UIKit.label("지형 %s / %s" % [GameData.grade_mark(gu), GameData.grade_mark(gt)], 16, UIKit.MUTED, true))
 	else:
 		mid.add_child(UIKit.label(_preview_for(u, action, t), 26, UIKit.GOOD, true))
-	row.add_child(_compare_side(t, dmg))
+	row.add_child(_compare_side(t, dmg, 0))
 	return card
 
 
 ## 비교 카드 한쪽: 도트 + 이름·Lv·속성 + HP 막대(예상 피해만큼 붉게) + MP
-func _compare_side(x: BattleUnit, incoming: int) -> Control:
+func _compare_side(x: BattleUnit, incoming: int, mp_cost: int) -> Control:
 	var vb := VBoxContainer.new()
 	vb.custom_minimum_size = Vector2(200, 0)
 	vb.add_theme_constant_override("separation", 2)
@@ -1370,7 +1383,7 @@ func _compare_side(x: BattleUnit, incoming: int) -> Control:
 		GameData.element_color(x.spirit.element()).lightened(0.4))
 	top.add_child(nm)
 	vb.add_child(_vital_bar("HP", x.spirit.hp, x.spirit.max_hp(), incoming, Color(0.4, 0.9, 0.45)))
-	vb.add_child(_vital_bar("MP", x.spirit.mp, x.spirit.max_mp(), 0, Color(0.45, 0.65, 1.0)))
+	vb.add_child(_vital_bar("MP", x.spirit.mp, x.spirit.max_mp(), mp_cost, Color(0.45, 0.65, 1.0)))
 	var master := "마스터: " + (GameState.summoner.display_name() if x.team == 0 else (enemy_summoner_unit.spirit.display_name() if x.owned and enemy_summoner_unit != null else "없음"))
 	if x.is_summoner:
 		master = "정령사"
@@ -1382,11 +1395,15 @@ func _compare_side(x: BattleUnit, incoming: int) -> Control:
 func _vital_bar(label: String, cur: int, mx: int, loss: int, col: Color) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
-	row.add_child(UIKit.label(label, 14, UIKit.MUTED))
+	var tag := UIKit.label(label, 14, UIKit.MUTED)
+	tag.autowrap_mode = TextServer.AUTOWRAP_OFF
+	tag.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	tag.custom_minimum_size = Vector2(26, 0)
+	row.add_child(tag)
 	var bar := Control.new()
-	bar.custom_minimum_size = Vector2(100, 12)
+	bar.custom_minimum_size = Vector2(92, 12)
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var w := 100.0
+	var w := 92.0
 	var bg := ColorRect.new()
 	bg.color = Color(0.15, 0.15, 0.2)
 	bg.size = Vector2(w, 12)
@@ -1403,7 +1420,11 @@ func _vital_bar(label: String, cur: int, mx: int, loss: int, col: Color) -> Cont
 		lost.size = Vector2(w * float(cur - after) / float(maxi(1, mx)), 12)
 		bar.add_child(lost)
 	row.add_child(bar)
-	row.add_child(UIKit.label("%d/%d" % [cur, mx], 14))
+	var num := UIKit.label("%d→%d" % [cur, maxi(0, cur - loss)] if loss > 0 else "%d/%d" % [cur, mx], 14,
+		Color(1.0, 0.6, 0.55) if loss > 0 else Color.WHITE)
+	num.autowrap_mode = TextServer.AUTOWRAP_OFF
+	num.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	row.add_child(num)
 	return row
 
 
@@ -1886,6 +1907,7 @@ func _enemy_try_item(u: BattleUnit) -> bool:
 ##  - 반격: 피해는 그대로, 살아남고 상대가 바로 옆이면 기본 공격으로 되받아친다.
 func _tab_attack(u: BattleUnit, target: BattleUnit, action: Dictionary) -> void:
 	var kind := str(action.get("type", ""))
+	var mp_before := u.spirit.mp
 	var element := _action_element(u, action)
 	var power := _attack_power(u)
 	var name_text := "공격"
@@ -1908,13 +1930,15 @@ func _tab_attack(u: BattleUnit, target: BattleUnit, action: Dictionary) -> void:
 		var est := _expected_damage(u, u.cell, target, action)
 		if response == "defend" and kind != "sskill":
 			est = maxi(1, int(round(est * BattleLogic.DEFEND_MULT)))
-		var right := "방어 (피해 절반)" if response == "defend" else "반격"
+		var right := "방어 (피해 절반)" if response == "defend" else "반격 (기본 공격)"
 		if response == "counter" and _can_counter(target, u):
-			right += "  명중%d%% %d" % [int(_hit_chance(target, u, {"type": "attack"}, false)), _counter_damage(target, u, false)]
+			right += "\n명중 %d%% · 피해 %d" % [int(_hit_chance(target, u, {"type": "attack"}, false)), _counter_damage(target, u, false)]
 		elif response == "counter":
 			right = "반격 불가 (거리)"
-		duel.set_header("%s · %s\n명중%d%%  피해 약 %d" % [u.spirit.display_name(), name_text, int(chance), est],
-			"%s\n%s" % [target.spirit.display_name(), right])
+		duel.set_header("%s · %s\n명중 %d%% · 피해 %d" % [u.spirit.display_name(), name_text, int(chance), est],
+			"%s · %s" % [target.spirit.display_name(), right])
+		if u.spirit.mp < mp_before:
+			await duel.spend_mp(0, mp_before, u.spirit.mp)
 	if response == "defend":
 		_effect("방어", target.draw_pos + Vector2(0, -34), Color(0.7, 0.85, 1.0))
 		if duel != null:
@@ -2059,7 +2083,7 @@ func _fill_defence_window(holder: VBoxContainer, attacker: BattleUnit, target: B
 	var set_pick := func(v: String):
 		choice["pick"] = v
 		choice["dirty"] = true
-	var cb := _window_button("반격 — 기본 공격\n%s" % ("명중%d%% 피해 %d" % [int(_hit_chance(target, attacker, {"type": "attack"}, false)), _counter_damage(target, attacker, false)] if can_counter else "거리가 멀어 불가"),
+	var cb := _window_button("반격 — 기본 공격\n%s" % ("명중 %d%% · 피해 %d" % [int(_hit_chance(target, attacker, {"type": "attack"}, false)), _counter_damage(target, attacker, false)] if can_counter else "거리가 멀어 불가"),
 		set_pick.bind("counter"), not can_counter, str(choice["pick"]) == "counter")
 	right.add_child(cb)
 	var db := _window_button("방어\n받는 피해 절반 · 회피↑", set_pick.bind("defend"), false, str(choice["pick"]) == "defend")

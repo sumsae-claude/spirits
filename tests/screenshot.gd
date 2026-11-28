@@ -49,11 +49,17 @@ func _ready() -> void:
 	await _frames(5)
 	b.has_moved = true
 	b.reachable = {}
-	b._open_target_menu(foe)
+	var pre := {}
+	ally.spirit.species_id = "blazebean"
+	ally.spirit.level = maxi(ally.spirit.level, 12)
+	for sid in ally.spirit.known_skills():
+		pre = {"type": "skill", "skill_id": sid}
+	ally.spirit.full_heal()
+	b._open_target_menu(foe, pre)
 	await _frames(10)
 	_shot("3_attack_confirm")
 	b._confirm_attack()
-	await _frames(14)
+	await _frames(22)
 	_shot("4_duel")
 	await _frames(30)
 	_shot("5_duel_later")

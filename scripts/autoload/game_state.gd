@@ -1,7 +1,9 @@
 extends Node
 ## 진행 상태(정령사, 계약 정령, 보관함, 인벤토리)와 저장/불러오기.
 
-const SAVE_PATH := "user://save.json"
+## 저장: 0번 = 자동 저장 칸 (전투 후·지도 이동 때 자동), 1~99번 = 직접 저장하는 슬롯
+const OLD_SAVE_PATH := "user://save.json"   # 슬롯 도입 전 저장 → 자동 저장 칸으로 옮김
+const SAVE_SLOTS := 99
 const SAVE_VERSION := 2
 ## 정령사 속성 -> 첫 계약 정령
 const STARTERS := {"wind": "breezebird", "fire": "emberbean", "grass": "pebble", "water": "dewdrop"}
@@ -57,12 +59,82 @@ func new_game(p_name: String, element: String) -> void:
 	save_game()
 
 
+func slot_path(slot: int) -> String:
+	return "user://save_auto.json" if slot == 0 else "user://save_%02d.json" % slot
+
+
+func _migrate_old_save() -> void:
+	if FileAccess.file_exists(OLD_SAVE_PATH) and not FileAccess.file_exists(slot_path(0)):
+		DirAccess.copy_absolute(ProjectSettings.globalize_path(OLD_SAVE_PATH), ProjectSettings.globalize_path(slot_path(0)))
+
+
 func has_save() -> bool:
-	return FileAccess.file_exists(SAVE_PATH)
+	return latest_slot() >= 0
+
+
+## 가장 최근에 저장된 칸 번호 (없으면 -1)
+func latest_slot() -> int:
+	_migrate_old_save()
+	var best := -1
+	var best_time := -1
+	for i in range(0, SAVE_SLOTS + 1):
+		var path := slot_path(i)
+		if FileAccess.file_exists(path):
+			var t := int(FileAccess.get_modified_time(path))
+			if t > best_time:
+				best_time = t
+				best = i
+	return best
+
+
+## 슬롯 목록에 보여 줄 요약. 빈 칸이면 빈 딕셔너리.
+func slot_info(slot: int) -> Dictionary:
+	if slot == 0:
+		_migrate_old_save()
+	var path := slot_path(slot)
+	if not FileAccess.file_exists(path):
+		return {}
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	var data = JSON.parse_string(f.get_as_text())
+	if typeof(data) != TYPE_DICTIONARY:
+		return {"broken": true}
+	var meta: Dictionary = data.get("meta", {})
+	meta["time"] = Time.get_datetime_string_from_unix_time(int(FileAccess.get_modified_time(path)) + _tz_offset_sec(), true)
+	return meta
+
+
+func _tz_offset_sec() -> int:
+	return int(Time.get_time_zone_from_system().get("bias", 0)) * 60
+
+
+## 슬롯에 저장 (자동 저장 칸에도 같이 남긴다)
+func save_to_slot(slot: int) -> void:
+	save_game()
+	if slot > 0:
+		_write_save(slot_path(slot))
+
+
+func load_slot(slot: int) -> bool:
+	return _read_save(slot_path(slot))
 
 
 func save_game() -> void:
+	_write_save(slot_path(0))
+
+
+func _write_save(path: String) -> void:
 	var data := {
+		"meta": {
+			"name": summoner.display_name() if summoner != null else DEFAULT_NAME,
+			"element": home_element(),
+			"level": summoner.level if summoner != null else 1,
+			"chapter": str(chapter_data(active_chapter).get("title", "")),
+			"region": chapter_region_name(active_chapter),
+			"gold": gold,
+			"spirits": party.size(),
+		},
 		"version": SAVE_VERSION,
 		"summoner": summoner.to_dict() if summoner != null else {},
 		"party": party.map(func(s): return s.to_dict()),
@@ -75,17 +147,23 @@ func save_game() -> void:
 		"cleared_stages": cleared_stages,
 		"flags": flags,
 	}
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		push_error("저장 실패: %s" % error_string(FileAccess.get_open_error()))
 		return
 	f.store_string(JSON.stringify(data, "\t"))
 
 
+## 가장 최근 저장 불러오기 (타이틀의 '이어하기')
 func load_game() -> bool:
-	if not has_save():
+	var slot := latest_slot()
+	return slot >= 0 and _read_save(slot_path(slot))
+
+
+func _read_save(path: String) -> bool:
+	if not FileAccess.file_exists(path):
 		return false
-	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return false
 	var data = JSON.parse_string(f.get_as_text())

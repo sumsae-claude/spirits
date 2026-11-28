@@ -147,9 +147,7 @@ func _on_rival() -> void:
 
 
 func _on_save() -> void:
-	GameState.save_game()
-	message = "저장했습니다."
-	_refresh()
+	SaveSlots.open(self, "save")
 
 
 func _on_title() -> void:

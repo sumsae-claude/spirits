@@ -86,6 +86,8 @@ var captured: Array = []        # 계약한 야생 Spirit
 var effects: Array = []         # 떠오르는 텍스트
 var xp_gained: Dictionary = {}  # Spirit -> 이번 전투에서 얻은 경험치 (행동할 때마다 바로 받음)
 var xp_msgs: Array[String] = [] # 전투 중 레벨업·스킬 습득 메시지 (결과 화면에 다시 보여 줌)
+var xp_start_level: Dictionary = {}  # Spirit -> 이번 전투 시작 때 레벨 (결과에 "Lv.4 → Lv.6 (+2)")
+var script_sub := ""            # 튜토리얼 소환 단계의 세부 상태: menu / sheet / place
 var fx: Array = []              # 공격·소환·퇴장 시각 효과 {"kind", "pos", "color", "t", "dur", ...}
 var battle_speed := 1
 var rng := RandomNumberGenerator.new()
@@ -1448,12 +1450,14 @@ func _award_xp(u: BattleUnit, amount: int, big: bool) -> void:
 	if u == null or u.team != 0 or amount <= 0:
 		return
 	var s := u.spirit
+	if not xp_start_level.has(s):
+		xp_start_level[s] = s.level
 	xp_gained[s] = int(xp_gained.get(s, 0)) + amount
 	var old_level := s.level
 	var msgs: Array[String] = s.gain_xp(amount)
 	effects.append({"text": "+%d EXP" % amount, "pos": u.draw_pos + Vector2(0, -26), "color": Color(0.55, 0.85, 1.0) if not big else Color(0.7, 0.95, 1.0), "t": 0.15})
 	if s.level > old_level:
-		_effect("LEVEL UP!", u.draw_pos + Vector2(0, -50), UIKit.GOLD)
+		_effect("LEVEL UP! Lv.%d (+%d)" % [s.level, s.level - old_level], u.draw_pos + Vector2(0, -50), UIKit.GOLD)
 		_add_fx("rise", u.draw_pos, UIKit.GOLD, 0.9)
 	for m in msgs:
 		_log(m)
@@ -1466,7 +1470,11 @@ func _xp_summary() -> Array[String]:
 	var lines: Array[String] = []
 	for o in xp_gained:
 		var s: Spirit = o
-		lines.append("%s 경험치 +%d  (Lv.%d)" % [s.display_name(), int(xp_gained[o]), s.level])
+		var start := int(xp_start_level.get(s, s.level))
+		if s.level > start:
+			lines.append("%s 경험치 +%d  Lv.%d → Lv.%d (+%d)" % [s.display_name(), int(xp_gained[o]), start, s.level, s.level - start])
+		else:
+			lines.append("%s 경험치 +%d  (Lv.%d)" % [s.display_name(), int(xp_gained[o]), s.level])
 	if lines.is_empty():
 		lines.append("이번 전투에서 얻은 경험치가 없습니다.")
 	lines.append_array(xp_msgs)
@@ -1886,6 +1894,7 @@ func _draw() -> void:
 		if u.is_active() or (u.vanishing and u.fade > 0.01):
 			_draw_unit(u)
 	_draw_target_marks()
+	_draw_advantage_marks()
 	_draw_fx()
 	_draw_tutorial_focus()
 
@@ -1914,8 +1923,8 @@ func _cell_overlay(c: Vector2i) -> Color:
 	if phase == "choose" and choose_target != null and choose_target.cell == c:
 		var tint2 := COLOR_ALLY_TARGET if choose_target.team == 0 else COLOR_TARGET
 		return Color(tint2, 0.5 + 0.2 * pulse)
-	if adv.a > 0.0 and phase in ["player", "choose", "targeting"]:
-		return Color(adv, 0.45)
+	if adv.a > 0.0 and phase == "player" and hit_now.has(c):
+		return Color(adv, 0.45)  # 칸 색칠은 지금(미리보기) 자리에서 실제로 공격할 수 있는 적만
 	if phase == "placing" and place_cells.has(c):
 		return Color(COLOR_PLACE, 0.45 + 0.2 * pulse)
 	if phase == "player" and not has_moved and reachable.has(c):
@@ -2162,6 +2171,36 @@ func _draw_unit(u: BattleUnit) -> void:
 	draw_rect(bar, Color(0, 0, 0, 0.75))
 	var hp_color := Color(0.4, 0.9, 0.45) if ratio > 0.5 else (Color(0.95, 0.8, 0.3) if ratio > 0.25 else Color(0.95, 0.35, 0.3))
 	draw_rect(Rect2(bar.position, Vector2(56.0 * ratio, 6)), hp_color)
+
+
+## 고른 아군 기준 상성: 적 머리 위 작은 아이콘 (유리 초록 ▲ / 불리 회색 ▼, 보통은 없음).
+## 공격할 수 있는지와는 별개 — 공격 가능은 칸 색·조준 표시로만.
+func _draw_advantage_marks() -> void:
+	if active == null or active.team != 0 or not (phase in ["player", "choose", "targeting"]):
+		return
+	var el := active.spirit.element()
+	if phase == "targeting":
+		var ael := _action_element(active, pending)
+		if ael == "":
+			return
+		el = ael
+	for o in units:
+		var e: BattleUnit = o
+		if e.team == 0 or not e.is_active():
+			continue
+		var mult := GameData.element_multiplier(el, e.spirit.element())
+		if mult == 1.0:
+			continue
+		var up := mult > 1.0
+		var p := e.draw_pos + e.anim_offset + Vector2(22, -40)
+		var col := COLOR_ADV_GOOD if up else COLOR_ADV_BAD
+		var tri := PackedVector2Array([p + Vector2(0, -8), p + Vector2(8, 6), p + Vector2(-8, 6)]) if up \
+			else PackedVector2Array([p + Vector2(0, 8), p + Vector2(8, -6), p + Vector2(-8, -6)])
+		draw_circle(p, 12.0, Color(0, 0, 0, 0.55))
+		draw_colored_polygon(tri, col)
+		var outline := tri.duplicate()
+		outline.append(tri[0])
+		draw_polyline(outline, Color(0, 0, 0, 0.8), 1.5)
 
 
 ## 공격·소환·퇴장 시각 효과
@@ -2592,7 +2631,7 @@ func _show_help() -> void:
 	rt.bbcode_enabled = true
 	rt.fit_content = true
 	rt.add_theme_font_size_override("normal_font_size", 22)
-	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b] (속성 지형)\n숲=풀 · 물가=물 · 용암=불 · 모래밭=바람\n자기 속성 정령: 이동↑ 공격 ×1.2 받는 피해 ×0.8\n다른 속성 정령: 이동↓ 공격 ×0.8 받는 피해 ×1.2\n마법진: 라운드마다 HP·MP 회복, 우리 편이 차지하면 소환 가능\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
+	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n아군을 고르면 적 머리 위에 [color=#4de566]▲ 유리[/color] / [color=#80808f]▼ 불리[/color] 표시\n칸이 색칠된 적 = 지금 자리에서 공격할 수 있는 적\n\n[b]지형[/b] (속성 지형)\n숲=풀 · 물가=물 · 용암=불 · 모래밭=바람\n자기 속성 정령: 이동↑ 공격 ×1.2 받는 피해 ×0.8\n다른 속성 정령: 이동↓ 공격 ×0.8 받는 피해 ×1.2\n마법진: 라운드마다 HP·MP 회복, 우리 편이 차지하면 소환 가능\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
 	vb.add_child(rt)
 	vb.add_child(UIKit.spacer())
 	vb.add_child(UIKit.button("닫기", overlay.queue_free))
@@ -2715,6 +2754,7 @@ func _on_tut_input(event: InputEvent) -> void:
 				_mark_ui()
 			return  # 진행 중인 단계는 지시대로 해야 넘어간다
 		_show_next_tutorial()
+		_mark_ui()
 
 
 func _tutorial_focus_cells(spec: String) -> Array:
@@ -2848,8 +2888,17 @@ func _show_script_step() -> void:
 			if t != null and t.is_active():
 				focus.append(t.cell)
 		"summon":
-			focus.append(summoner_unit.cell)
+			match script_sub:
+				"sheet":
+					pass  # 소환 창 안 — 맵 표시 없음
+				"place":
+					for c in place_cells:
+						focus.append(c)
+				_:
+					focus.append(summoner_unit.cell)
 	var shown := step.duplicate()
+	if _script_step_is("summon") and script_sub != "" and step.has("t_" + script_sub):
+		shown["t"] = step["t_" + script_sub]
 	shown["_cells"] = focus
 	tut_queue.clear()
 	tut_queue.append(shown)
@@ -2860,6 +2909,7 @@ func _show_script_step() -> void:
 
 func _script_advance() -> void:
 	script_i += 1
+	script_sub = ""
 	if _script_step_is("summon"):
 		menu_open = true  # 소환 단계: 정령사 메뉴를 바로 연다 (이동하지 않음)
 	_show_script_step()
@@ -3006,6 +3056,12 @@ func _rebuild_ui() -> void:
 			hint_label.text = ""
 
 	log_label.text = "\n".join(PackedStringArray(log_lines))
+	# 튜토리얼 소환 단계: 화면(메뉴 / 소환 창 / 칸 고르기)에 맞춰 대사를 바꾼다
+	if _script_step_is("summon"):
+		var sub := "place" if phase == "placing" else ("sheet" if submenu == "summon" else "menu")
+		if sub != script_sub:
+			script_sub = sub
+			_show_script_step()
 	cmd_panel.visible = cmd_box.get_child_count() > 0 and anchor != null
 	# 튜토리얼에서 메뉴를 쓸 수 없는 단계(고르기·이동·대기)는 메뉴를 숨겨 칸을 가리지 않게
 	if _script_active() and str(_script_step().get("do", "")) in ["select", "move", "wait"]:
@@ -3164,7 +3220,9 @@ func _build_summon_list() -> void:
 	detail_label.visible = false
 	log_label.visible = false
 	summon_box.visible = true
-	bottom_panel.offset_top = MAP_TOP + 96.0   # 화면의 약 70%
+	_tutorial("summon_sheet")
+	# 화면의 약 70%. 튜토리얼 말풍선이 떠 있으면 가리지 않게 조금 아래부터
+	bottom_panel.offset_top = MAP_TOP + (200.0 if tut_bubble.visible else 96.0)
 	var cands: Array = []
 	for o in _all_contracted():
 		if _field_unit_of(o) == null:

@@ -23,6 +23,12 @@ var card_height := 66.0
 
 var _tabs: HBoxContainer
 var _grid: GridContainer
+var _scroll: ScrollContainer
+## 끌어서 스크롤: 카드 위에서 끌어도 목록이 움직이고, 끈 뒤 손을 떼면 선택되지 않게
+const TAP_SLOP := 14.0
+var _press_pos := Vector2.ZERO
+var _pressing := false
+var _dragged := false
 
 
 func setup(p_context: String, p_spirits: Array, p_info_fn: Callable, p_sort_names: Array = ["기본순", "레벨순", "이름순"]) -> void:
@@ -41,8 +47,12 @@ func _ready() -> void:
 	_tabs.add_theme_constant_override("separation", 6)
 	add_child(_tabs)
 	var scroll := ScrollContainer.new()
+	_scroll = scroll
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.scroll_deadzone = int(TAP_SLOP)
+	scroll.gui_input.connect(_on_scroll_input)
+	scroll.get_v_scroll_bar().custom_minimum_size = Vector2(16, 0)  # 잡기 쉽게 굵은 스크롤 막대
 	add_child(scroll)
 	_grid = GridContainer.new()
 	_grid.columns = columns
@@ -59,6 +69,17 @@ func filter() -> String:
 
 func sort_mode() -> int:
 	return clampi(int(GameState.flags.get("list_sort_" + context, 0)), 0, sort_names.size() - 1)
+
+
+## 기본 방향을 뒤집었는가 (기본: 점수·레벨은 높은 순, 이름은 가나다순)
+func reversed() -> bool:
+	return bool(GameState.flags.get("list_rev_" + context, false))
+
+
+## 지금 보이는 방향이 내림차순인가 (버튼 표시용)
+func _is_descending() -> bool:
+	var natural_desc := sort_mode() != 2   # 이름순만 기본이 오름차순
+	return natural_desc != reversed()
 
 
 func refresh() -> void:
@@ -83,8 +104,13 @@ func _rebuild() -> void:
 		_tabs.add_child(tb)
 	var sb := _pill("⇅ " + str(sort_names[sort_mode()]), false, Color(0.85, 0.9, 1.0))
 	sb.pressed.connect(_next_sort)
-	sb.custom_minimum_size = Vector2(118, 44)
+	sb.custom_minimum_size = Vector2(108, 44)
 	_tabs.add_child(sb)
+	var db := _pill("▼" if _is_descending() else "▲", false, Color(0.85, 0.9, 1.0))
+	db.tooltip_text = "내림차순" if _is_descending() else "오름차순"
+	db.pressed.connect(_flip_dir)
+	db.custom_minimum_size = Vector2(48, 44)
+	_tabs.add_child(db)
 
 	var entries: Array = []
 	for o in spirits:
@@ -100,12 +126,18 @@ func _rebuild() -> void:
 		_grid.add_child(UIKit.label("이 속성의 정령이 없습니다.", 20, UIKit.MUTED))
 
 
-## 정렬: 쓸 수 없는 정령은 늘 아래. 0 = 기본/추천(점수), 1 = 레벨, 2 = 이름
+## 정렬: 쓸 수 없는 정령은 방향과 상관없이 늘 아래. 0 = 기본/추천(점수), 1 = 레벨, 2 = 이름
 func _before(a: Dictionary, b: Dictionary) -> bool:
 	var da := bool((a["info"] as Dictionary).get("disabled", false))
 	var db := bool((b["info"] as Dictionary).get("disabled", false))
 	if da != db:
 		return db
+	if reversed():
+		return _natural_before(b, a)
+	return _natural_before(a, b)
+
+
+func _natural_before(a: Dictionary, b: Dictionary) -> bool:
 	var sa: Spirit = a["s"]
 	var sb: Spirit = b["s"]
 	match sort_mode():
@@ -158,8 +190,41 @@ func _card(s: Spirit, info: Dictionary) -> Button:
 	b.add_theme_stylebox_override("pressed", hv)
 	b.add_theme_stylebox_override("disabled", st)
 	b.disabled = bool(info.get("disabled", false))
-	b.pressed.connect(func(): picked.emit(s))
+	# 카드 위에서 끌어도 스크롤되게 터치를 목록으로 넘기고, 끈 경우엔 선택하지 않는다
+	b.mouse_filter = Control.MOUSE_FILTER_PASS
+	b.gui_input.connect(_on_card_input)
+	b.pressed.connect(func():
+		if not _dragged:
+			picked.emit(s))
 	return b
+
+
+func _on_card_input(event: InputEvent) -> void:
+	_track_drag(event)
+
+
+func _on_scroll_input(event: InputEvent) -> void:
+	_track_drag(event)
+	# 마우스(PC)로 끌 때도 스크롤 (터치 화면은 ScrollContainer가 스스로 처리)
+	if _pressing and event is InputEventMouseMotion and not DisplayServer.is_touchscreen_available():
+		if _dragged:
+			_scroll.scroll_vertical -= int((event as InputEventMouseMotion).relative.y)
+
+
+func _track_drag(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+		var mb := event as InputEventMouseButton
+		if mb.pressed:
+			_pressing = true
+			_dragged = false
+			_press_pos = mb.global_position
+		else:
+			_pressing = false
+			if mb.global_position.distance_to(_press_pos) > TAP_SLOP:
+				_dragged = true
+	elif event is InputEventMouseMotion and _pressing:
+		if (event as InputEventMouseMotion).global_position.distance_to(_press_pos) > TAP_SLOP:
+			_dragged = true
 
 
 func _pill(text: String, selected: bool, col: Color) -> Button:
@@ -186,6 +251,11 @@ func _pill(text: String, selected: bool, col: Color) -> Button:
 
 func _set_filter(key: String) -> void:
 	GameState.flags["list_filter_" + context] = key
+	_rebuild.call_deferred()
+
+
+func _flip_dir() -> void:
+	GameState.flags["list_rev_" + context] = not reversed()
 	_rebuild.call_deferred()
 
 

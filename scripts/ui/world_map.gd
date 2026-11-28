@@ -802,9 +802,7 @@ func _claim_quest(q: Dictionary) -> void:
 
 
 func _town_save() -> void:
-	GameState.save_game()
-	town_msg = ["저장했습니다."]
-	_rebuild_town.call_deferred()
+	SaveSlots.open(self, "save")
 
 
 # ---- 이벤트: 대화 → 선택지 → 결과 (한 번만)

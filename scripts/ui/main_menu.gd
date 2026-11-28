@@ -19,12 +19,17 @@ func _show_title() -> void:
 	if _message != "":
 		vb.add_child(UIKit.label(_message, 24, Color(1, 0.6, 0.5), true))
 	vb.add_child(UIKit.button("새 게임", _on_new_game))
-	vb.add_child(UIKit.button("이어하기", _on_continue, not GameState.has_save()))
+	vb.add_child(UIKit.button("이어하기 (최근 저장)", _on_continue, not GameState.has_save()))
+	vb.add_child(UIKit.button("불러오기", _on_load, not GameState.has_save()))
 	vb.add_child(UIKit.label("체험판 v0.9 (1~2장)", 20, UIKit.MUTED, true))
 
 
 func _on_new_game() -> void:
 	_show_starters.call_deferred()
+
+
+func _on_load() -> void:
+	SaveSlots.open(self, "load")
 
 
 func _on_continue() -> void:

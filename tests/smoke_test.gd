@@ -134,6 +134,25 @@ func _run() -> void:
 		hub.selected = GameState.party[0]
 		hub._refresh()
 		await frames(20)
+	# 저장 슬롯: 3번에 저장 → 요약 확인 → 창 열기 → 불러오기
+	var gold_before := GameState.gold
+	GameState.save_to_slot(3)
+	var info := GameState.slot_info(3)
+	say("슬롯 3: %s" % str(info))
+	if info.is_empty():
+		fail("슬롯 3 저장 안 됨")
+	var w := SaveSlots.open(scene(), "save")
+	await frames(10)
+	w._close()
+	w = SaveSlots.open(scene(), "load")
+	await frames(10)
+	GameState.gold = 1
+	w._on_slot(3, false)
+	await wait_scene("world_map")
+	await frames(10)
+	if GameState.gold != gold_before:
+		fail("슬롯 3 불러오기 후 골드가 다름 (%d / %d)" % [GameState.gold, gold_before])
+	say("불러오기 확인: 골드 %d, 최근 칸 %d" % [GameState.gold, GameState.latest_slot()])
 	_end()
 
 

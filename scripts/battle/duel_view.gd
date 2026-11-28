@@ -300,6 +300,81 @@ func banner(text: String, col: Color) -> void:
 	await _wait(0.5)
 
 
+## 디스펠: side(0/1)에서 상대에게 금빛 실이 뻗는다
+func thread(side: int) -> void:
+	if skip:
+		return
+	var a: TextureRect = _sprites[side]
+	var b: TextureRect = _sprites[1 - side]
+	var from := a.position + Vector2(56, 50)
+	var to := b.position + Vector2(56, 56)
+	var hop := create_tween()
+	hop.tween_property(a, "position", _home[side] + Vector2(0, -14), 0.1)
+	hop.tween_property(a, "position", _home[side], 0.1)
+	await hop.finished
+	var line := Line2D.new()
+	line.width = 4.0
+	line.default_color = Color(1.0, 0.85, 0.4)
+	line.points = PackedVector2Array([from, from])
+	_field.add_child(line)
+	var steps := 10
+	for k in steps:
+		if skip:
+			break
+		var t := float(k + 1) / steps
+		var p := from.lerp(to, t) + Vector2(0, sin(t * PI * 3.0) * 10.0 * (1.0 - t))
+		line.add_point(p)
+		await _wait(0.03)
+	_thread_line = line
+	await _wait(0.15)
+
+
+var _thread_line: Line2D = null
+
+
+## 디스펠 성공: 금빛 고리로 감싸며 사라지고 "GET!"
+func seal(side: int) -> void:
+	var spr: TextureRect = _sprites[side]
+	if skip:
+		spr.modulate.a = 0.0
+		return
+	var ring := Line2D.new()
+	ring.width = 5.0
+	ring.default_color = Color(1.0, 0.85, 0.4)
+	var c := spr.position + Vector2(56, 60)
+	var pts := PackedVector2Array()
+	for k in 25:
+		var ang := TAU * k / 24.0
+		pts.append(c + Vector2(cos(ang) * 64.0, sin(ang) * 28.0))
+	ring.points = pts
+	_field.add_child(ring)
+	var tw := create_tween()
+	tw.tween_property(ring, "scale", Vector2(0.9, 0.9), 0.0)
+	tw.parallel().tween_property(spr, "modulate", Color(1.0, 0.9, 0.5, 1.0), 0.2)
+	tw.tween_property(spr, "scale", Vector2(0.2, 0.2), 0.35)
+	tw.parallel().tween_property(spr, "modulate:a", 0.0, 0.35)
+	tw.parallel().tween_property(ring, "modulate:a", 0.0, 0.45)
+	if _thread_line != null:
+		tw.parallel().tween_property(_thread_line, "modulate:a", 0.0, 0.3)
+	await banner("GET!", Color(1.0, 0.88, 0.4))
+	await _wait(0.2)
+
+
+## 디스펠 실패: 실이 끊기고 "저항!"
+func resist(side: int) -> void:
+	if skip:
+		return
+	if _thread_line != null:
+		var tw := create_tween()
+		tw.tween_property(_thread_line, "modulate", Color(1, 1, 1, 0), 0.25)
+	var spr: TextureRect = _sprites[side]
+	var sh := create_tween()
+	sh.tween_property(spr, "position", _home[side] + Vector2(10, 0), 0.05)
+	sh.tween_property(spr, "position", _home[side] + Vector2(-10, 0), 0.06)
+	sh.tween_property(spr, "position", _home[side], 0.05)
+	await banner("저항!", Color(0.6, 0.9, 1.0))
+
+
 func finish() -> void:
 	await _wait(0.35)
 	queue_free()

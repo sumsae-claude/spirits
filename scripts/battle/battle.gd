@@ -49,6 +49,7 @@ const COLOR_MOVE_LINE := Color(1.0, 1.0, 1.0, 0.85)  # 이동 범위 = 흰 테�
 var treasure: Dictionary = {}
 var battle_loot: Array = []
 var picked_this_move := false
+var popup_queue: Array = []   # 보여 줄 아이템 획득 팝업 [{"ids", "title"}]
 var attack_confirm: Control = null   # '공격 선택' 확인창 (원작처럼 기술·명중·피해 비교 후 확인)
 var confirm_pick := 0
 var status_holder: VBoxContainer     # 아래 패널의 유닛 상태창 (원작처럼 능력치·공격 3칸·소지품 3칸)
@@ -494,7 +495,15 @@ func _start_round() -> void:
 
 # ---------------------------------------------------------------- 아군 턴
 
+## 쌓인 아이템 획득 팝업을 차례로 보여 준다
+func _flush_popups() -> void:
+	while not popup_queue.is_empty():
+		var p: Dictionary = popup_queue.pop_front()
+		await ItemPopup.show_items(ui_root, p["ids"], str(p["title"]), "전투가 끝나면 가방에 들어간다")
+
+
 func _start_player_phase() -> void:
+	_flush_popups()   # 적 턴(반격 등)에 떨어진 아이템 — 팝업이 떠 있는 동안은 맵을 누를 수 없다
 	_clear_selection()
 	if _ready_allies().is_empty():
 		_start_enemy_phase()
@@ -981,6 +990,7 @@ func _move_player(c: Vector2i) -> void:
 		picked_this_move = true
 		_effect("획득: " + GameData.item_name(iid), active.draw_pos + Vector2(0, -24), UIKit.GOLD)
 		_log("%s이(가) 보물을 주웠다: %s (전투가 끝나면 가방으로)" % [active.spirit.display_name(), GameData.item_name(iid)])
+		await ItemPopup.show_items(ui_root, [iid], "보물 상자를 열었다!", "전투가 끝나면 가방에 들어간다")
 	phase = "player"
 	_mark_ui()
 	_tutorial("moved")
@@ -1634,6 +1644,7 @@ func _execute_player_action(target: BattleUnit) -> void:
 	_mark_ui()
 	var actor := active
 	await _perform(actor, action, target)
+	await _flush_popups()
 	_script_event("acted", {"type": str(action.get("type", "")), "target": target})
 	_finish_unit()
 
@@ -1734,9 +1745,18 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 		"attack", "skill":
 			await _tab_attack(u, target, action)
 		"dispel":
+			var mp0 := s.mp
 			s.mp = maxi(0, s.mp - GameState.summoner.dispel_cost())
-			await _anim_thread(u, target)
+			var duel := await _dispel_duel_open(u, target, _dispel_chance(u, target), mp0)
+			if duel == null:
+				await _anim_thread(u, target)
 			_try_dispel(u, target)
+			if duel != null:
+				if target.captured:
+					await duel.seal(1)
+				else:
+					await duel.resist(1)
+				await duel.finish()
 		"recall":
 			_recall(target)
 		"item":
@@ -2218,6 +2238,20 @@ func _try_counter(attacker: BattleUnit, defender: BattleUnit, duel: DuelView = n
 		await duel.show_hit(0, maxi(dmg, before - attacker.spirit.hp), attacker.spirit.hp if attacker.alive else 0)
 
 
+## 디스펠 연출 창 열기 (연출이 꺼져 있으면 null): 실이 뻗는 데까지 보여 준다
+func _dispel_duel_open(u: BattleUnit, target: BattleUnit, chance: float, mp_before: int) -> DuelView:
+	if not _duel_enabled():
+		return null
+	var duel := DuelView.open(ui_root, u.spirit, target.spirit, tile_tex.get(grid.terrain_at(target.cell), bg_tex),
+		GameData.element_color(u.spirit.element()).lightened(0.4), GameData.element_color(target.spirit.element()).lightened(0.4))
+	duel.set_header("%s · 디스펠\n성공률 %d%%" % [u.spirit.display_name(), int(round(chance * 100.0))],
+		"%s · 저항\n친밀도 ♥%d" % [target.spirit.display_name(), target.spirit.affinity] if target.owned or target.team == 0 else "%s · 저항" % target.spirit.display_name())
+	if u.spirit.mp < mp_before:
+		await duel.spend_mp(0, mp_before, u.spirit.mp)
+	await duel.thread(0)
+	return duel
+
+
 ## 전투 연출 창을 띄우는가: 설정(flags.battle_anim, 기본 켬). 튜토리얼 스크립트 중에는 말풍선과 겹치지 않게 끔
 func _duel_enabled() -> bool:
 	return bool(GameState.flags.get("battle_anim", true)) and not _script_active()
@@ -2449,6 +2483,7 @@ func _knock_out(target: BattleUnit) -> void:
 		var mat := GameData.element_material(target.spirit.element())
 		battle_loot.append(mat)
 		_effect(GameData.item_name(mat), target.draw_pos + Vector2(0, 20), Color(0.85, 0.75, 1.0))
+		popup_queue.append({"ids": [mat], "title": "%s이(가) 떨어뜨렸다!" % target.spirit.display_name()})
 	_vanish(target, "vanish", Color(1.0, 1.0, 1.0))
 	if target.team == 1 and not target.is_summoner:
 		GameState.quest_event("defeat", target.spirit.element())  # 마을 퇴치 의뢰
@@ -2583,9 +2618,12 @@ func _run_enemy_summoner_turn(u: BattleUnit) -> void:
 	# 적 정령사도 디스펠로 내 정령을 빼앗으려 한다 (약해진 정령, 친밀도가 낮을수록 위험)
 	var steal := _enemy_dispel_target(u, m)
 	if steal != null:
+		var mp0 := m.mp
 		m.mp = maxi(0, m.mp - m.dispel_cost())
-		await _anim_thread(u, steal)
 		var chance := BattleLogic.dispel_chance(m, steal.spirit, true)
+		var duel := await _dispel_duel_open(u, steal, chance, mp0)
+		if duel == null:
+			await _anim_thread(u, steal)
 		_log("적 정령사 %s이(가) %s에게 디스펠을 시도했다... (성공률 %d%%, 친밀도 ♥%d)" % [m.display_name(), steal.spirit.display_name(), int(round(chance * 100.0)), steal.spirit.affinity])
 		if rng.randf() < chance:
 			steal.team = 1
@@ -2595,8 +2633,14 @@ func _run_enemy_summoner_turn(u: BattleUnit) -> void:
 			steal.spirit.add_affinity(-10)
 			_effect("빼앗김!", steal.draw_pos + Vector2(0, -20), COLOR_OWNED_RING)
 			_log("%s이(가) 적 정령사에게 넘어갔다! 디스펠로 되찾을 수 있다." % steal.spirit.display_name())
+			if duel != null:
+				await duel.seal(1)
 		else:
 			_effect("저항!", steal.draw_pos + Vector2(0, -20), Color(0.6, 0.9, 1.0))
+			if duel != null:
+				await duel.resist(1)
+		if duel != null:
+			await duel.finish()
 		await get_tree().create_timer(ACTION_DELAY).timeout
 		return
 

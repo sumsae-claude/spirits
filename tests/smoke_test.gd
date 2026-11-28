@@ -14,6 +14,7 @@ func _ready() -> void:
 		print("SMOKE FAIL: 시간 초과로 중단")
 		get_tree().quit(2))
 	# 이 노드는 장면이 바뀌어도 남아 있도록 루트에 두고, 빈 노드를 '현재 장면'으로 둔다
+	ItemPopup.auto_close = true   # 아이템 획득 팝업은 저절로 닫히게
 	var ph := Node.new()
 	get_tree().root.add_child.call_deferred(ph)
 	await get_tree().process_frame

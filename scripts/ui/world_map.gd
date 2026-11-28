@@ -588,7 +588,7 @@ func _on_node_action() -> void:
 			GameState.mark_visited(str(n["id"]))
 			_open_town(n)
 		"gather":
-			_do_gather(n)
+			await _do_gather(n)
 	_busy = false
 	_rebuild_panel()
 
@@ -735,15 +735,10 @@ var town_msg: Array[String] = []
 
 func _do_gather(n: Dictionary) -> void:
 	var got := GameState.gather(n)
-	var names := PackedStringArray()
-	for iid in got:
-		names.append(GameData.item_name(str(iid)))
-	var vb := _open_overlay(GameState.fill_text(str(n.get("name", "채집"))))
-	vb.add_child(UIKit.label("채집했다!" if not got.is_empty() else "아무것도 없었다.", 30, UIKit.GOOD, true))
-	vb.add_child(UIKit.label(", ".join(names), 26, Color.WHITE, true))
-	vb.add_child(UIKit.label("거점·마을의 '가방 · 합성'에서 섞어 보세요.", 20, UIKit.MUTED, true))
-	vb.add_child(UIKit.spacer())
-	vb.add_child(UIKit.button("확인", _close_overlay, false, 64))
+	if got.is_empty():
+		return
+	await ItemPopup.show_items(self, got, "%s에서 채집했다!" % GameState.fill_text(str(n.get("name", ""))),
+		"가방에 들어갔다 · 거점·마을의 '가방 · 합성'에서 섞어 보기")
 
 
 func _open_craft() -> void:
@@ -836,7 +831,11 @@ func _accept_quest(q: Dictionary) -> void:
 
 
 func _claim_quest(q: Dictionary) -> void:
+	var before := GameState.inventory.size()
 	town_msg = GameState.claim_quest(q)
+	var got := GameState.inventory.slice(before)
+	if not got.is_empty():
+		ItemPopup.show_items(self, got, "의뢰 보상!")
 	town_msg.push_front("의뢰 완료: " + GameState.quest_text(q, "title"))
 	_rebuild_town.call_deferred()
 
@@ -861,6 +860,7 @@ func _choose_event(n: Dictionary, choice: Dictionary) -> void:
 	GameState.mark_visited(str(n["id"]))
 	var lines := PackedStringArray([GameState.fill_text(str(choice.get("result", "")))])
 	var battle: Dictionary = {}
+	var _popup_items: Array = []
 	for o in choice.get("effects", []):
 		var eff: Dictionary = o
 		if eff.has("gold"):
@@ -868,6 +868,7 @@ func _choose_event(n: Dictionary, choice: Dictionary) -> void:
 			lines.append("@gold:%d:" % int(eff["gold"]))
 		if eff.has("item") and GameData.items.has(str(eff["item"])):
 			GameState.inventory.append(str(eff["item"]))
+			_popup_items.append(str(eff["item"]))
 			lines.append("획득: %s" % GameData.equipment_desc(str(eff["item"])))
 		if eff.has("heal"):
 			GameState.heal_all()
@@ -889,3 +890,5 @@ func _choose_event(n: Dictionary, choice: Dictionary) -> void:
 		var stage := {"id": str(n["id"]) + "_battle", "name": str(battle.get("name", n.get("name", ""))),
 			"enemies": battle.get("enemies", [])}
 		vb.add_child(UIKit.button("싸운다!", func(): GameState.start_stage(stage)))
+	if not _popup_items.is_empty():
+		ItemPopup.show_items(self, _popup_items, "아이템을 얻었다!")

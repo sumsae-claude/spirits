@@ -1,22 +1,22 @@
 {
 	"fire_bolt": {
 		"name": "화염탄", "type": "attack", "target": "enemy", "element": "fire", "element_req": "fire",
-		"power": 65, "mp": 5, "range_min": 1, "range_max": 3, "learn_level": 1,
+		"power": 65, "mp": 5, "hit": 85, "range_min": 1, "range_max": 3, "learn_level": 1,
 		"desc": "불덩이를 날려 적 하나를 공격한다."
 	},
 	"water_bolt": {
 		"name": "물대포", "type": "attack", "target": "enemy", "element": "water", "element_req": "water",
-		"power": 65, "mp": 5, "range_min": 1, "range_max": 3, "learn_level": 1,
+		"power": 65, "mp": 5, "hit": 85, "range_min": 1, "range_max": 3, "learn_level": 1,
 		"desc": "강한 물줄기로 적 하나를 공격한다."
 	},
 	"stone_bolt": {
 		"name": "가시덩굴", "type": "attack", "target": "enemy", "element": "grass", "element_req": "grass",
-		"power": 65, "mp": 5, "range_min": 1, "range_max": 3, "learn_level": 1,
+		"power": 65, "mp": 5, "hit": 85, "range_min": 1, "range_max": 3, "learn_level": 1,
 		"desc": "가시 돋친 덩굴을 뻗어 적 하나를 공격한다."
 	},
 	"wind_bolt": {
 		"name": "진공탄", "type": "attack", "target": "enemy", "element": "wind", "element_req": "wind",
-		"power": 65, "mp": 5, "range_min": 1, "range_max": 3, "learn_level": 1,
+		"power": 65, "mp": 5, "hit": 85, "range_min": 1, "range_max": 3, "learn_level": 1,
 		"desc": "압축한 바람을 터뜨려 적 하나를 공격한다."
 	},
 	"heal_light": {
@@ -48,6 +48,11 @@
 		"name": "갑옷 부수기", "type": "debuff", "target": "enemy",
 		"stat": "def", "mult": 0.7, "rounds": 2, "mp": 5, "range_min": 1, "range_max": 3, "learn_level": 8,
 		"desc": "적 하나의 방어 -30% (2라운드)."
+	},
+	"purify_light": {
+		"name": "정화의 빛", "type": "cure", "target": "ally",
+		"mp": 4, "range_min": 0, "range_max": 3, "learn_level": 2,
+		"desc": "아군 하나의 상태이상(독·잠·혼란·지체·석화)을 풀어 준다."
 	},
 	"earth_breath": {
 		"name": "숲의 숨결", "type": "heal", "target": "self", "area": 2,

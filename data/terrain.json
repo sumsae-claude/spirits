@@ -1,31 +1,9 @@
 {
-	"plain": {
-		"name": "평지", "color": [0.17, 0.2, 0.26], "passable": true,
-		"desc": "특별한 효과 없음"
-	},
-	"forest": {
-		"name": "숲", "element": "grass", "color": [0.13, 0.3, 0.18], "passable": true,
-		"desc": "풀 속성 지형"
-	},
-	"water": {
-		"name": "물가", "element": "water", "color": [0.12, 0.25, 0.42], "passable": true,
-		"desc": "물 속성 지형"
-	},
-	"hill": {
-		"name": "모래밭", "element": "wind", "color": [0.62, 0.52, 0.34], "passable": true,
-		"desc": "바람 속성 지형"
-	},
-	"lava": {
-		"name": "용암지대", "element": "fire", "color": [0.42, 0.15, 0.1], "passable": true,
-		"desc": "불 속성 지형"
-	},
-	"circle": {
-		"name": "마법진", "color": [0.28, 0.22, 0.45], "passable": true,
-		"regen_all": 0.15, "mp_regen_all": 0.3,
-		"desc": "누구든 라운드 시작 시 HP 15%·MP 30% 회복 · 우리 편이 차지하면 소환 가능"
-	},
-	"rock": {
-		"name": "바위", "color": [0.12, 0.12, 0.14], "passable": false, "move": 99,
-		"desc": "지나갈 수 없음"
-	}
+	"plain": {"name": "평지", "color": [0.17, 0.2, 0.26], "passable": true, "desc": "특별한 효과 없음", "grade": {"fire": 0, "wind": 0, "grass": 10, "water": -10}},
+	"forest": {"name": "숲", "color": [0.13, 0.3, 0.18], "passable": true, "desc": "풀 속성 지형", "grade": {"grass": 20, "water": 10, "fire": -10, "wind": -10}},
+	"water": {"name": "물가", "color": [0.12, 0.25, 0.42], "passable": true, "desc": "물 속성 지형", "grade": {"water": 20, "wind": 10, "grass": -10, "fire": -20}},
+	"hill": {"name": "모래밭", "color": [0.62, 0.52, 0.34], "passable": true, "desc": "바람 속성 지형", "grade": {"wind": 20, "fire": 10, "grass": -10, "water": -20}},
+	"lava": {"name": "용암지대", "color": [0.42, 0.15, 0.1], "passable": true, "desc": "불 속성 지형", "grade": {"fire": 20, "wind": 10, "grass": -10, "water": -20}},
+	"circle": {"name": "마법진", "color": [0.28, 0.22, 0.45], "passable": true, "regen_all": 0.15, "mp_regen_all": 0.3, "desc": "누구든 라운드 시작 시 HP 15%·MP 30% 회복 · 우리 편이 차지하면 소환 가능", "grade": {"fire": 20, "wind": 20, "grass": 20, "water": 20}},
+	"rock": {"name": "바위", "color": [0.12, 0.12, 0.14], "passable": false, "move": 99, "desc": "지나갈 수 없음"}
 }

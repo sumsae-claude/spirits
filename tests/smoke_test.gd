@@ -353,11 +353,20 @@ func _play_battle() -> bool:
 			await frames()
 		if b.round_num > 25:
 			say("  라운드 초과 → 후퇴")
+			var fl: Array = b.full_log
+			for k in range(maxi(0, fl.size() - 16), fl.size()):
+				say("    | " + str(fl[k]))
 			b._on_retreat()
 			return false
 	await frames(10)
 	var victory: bool = b.summoner_unit.is_active()
 	say("  전투 끝: %s (라운드 %d)" % ["승리" if victory else "패배", b.round_num])
+	var counts := {}
+	for line in b.full_log:
+		for key in ["쓰러졌다", "제어를 벗어나", "넘어갔다", "상태가 되었다", "피했다", "빗나갔다", "소환했다", "계약했다", "방어"]:
+			if str(line).contains(key):
+				counts[key] = int(counts.get(key, 0)) + 1
+	say("    사건: %s" % str(counts))
 	if not victory:
 		var fl: Array = b.full_log
 		if b.guardian_unit != null:

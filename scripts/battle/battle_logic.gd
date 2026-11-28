@@ -8,6 +8,8 @@ const BASIC_ATTACK_RANGE := 1
 const MP_REGEN_PER_ROUND := 2
 ## 일반 공격(근접)을 받고 살아남으면 이 비율의 위력으로 반격. 스킬·원거리에는 반격 없음.
 const COUNTER_RATIO := 0.6
+## '방어'로 대응하면 받는 피해 배율 (정령사의 공격 마법은 예외)
+const DEFEND_MULT := 0.5
 ## 다른 정령사와 계약된 정령은 디스펠하기 어렵다
 const OWNED_DISPEL_MULT := 0.6
 ## 플레이어 정령사가 한 번에 받는 피해 상한 (최대 HP 비율). 한 방 패배 방지
@@ -34,6 +36,11 @@ static func calc_damage(attacker: Spirit, defender: Spirit, power: int, element:
 
 ## 디스펠(계약) 성공 확률.
 ## 대상 체력이 낮을수록, 시전자 레벨이 높을수록, 속성이 유리할수록 높다.
+## 친밀도가 높을수록 빼앗기 어렵다: 친밀도 100이면 확률 ×0.2 (한 자리 수)
+static func affinity_mult(target: Spirit) -> float:
+	return 1.0 - float(target.affinity) / 125.0
+
+
 static func dispel_chance(caster: Spirit, target: Spirit, owned: bool = false) -> float:
 	var hp_ratio := float(target.hp) / float(maxi(1, target.max_hp()))
 	var chance := 0.15 + (1.0 - hp_ratio) * 0.6 + float(caster.level - target.level) * 0.04
@@ -41,7 +48,7 @@ static func dispel_chance(caster: Spirit, target: Spirit, owned: bool = false) -
 		chance += 0.1
 	chance *= float(target.species().get("catch", 1.0))
 	if owned:
-		chance *= OWNED_DISPEL_MULT
+		chance *= affinity_mult(target)   # 다른 정령사와 계약된 정령: 친밀도만큼 어려움
 	return clampf(chance, 0.05, 0.95)
 
 

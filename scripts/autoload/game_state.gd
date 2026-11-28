@@ -274,7 +274,7 @@ func unequip(s: Spirit, slot: String) -> void:
 
 
 func make_encounter() -> Array:
-	var avg := average_party_level()
+	var avg := summoner.level if summoner != null else average_party_level()  # 적은 정령사 레벨을 따라간다
 	var count := 2 + randi() % 2
 	if battles_won >= 3:
 		count += 1
@@ -289,7 +289,7 @@ func make_encounter() -> Array:
 
 ## 적 정령사: 평균 레벨 +1, 계약 정령 2~4마리 (첫 정령은 같은 속성 = 선봉)
 func make_rival() -> Dictionary:
-	var avg := average_party_level()
+	var avg := summoner.level if summoner != null else average_party_level()
 	var elements: Array = GameData.ELEMENT_NAMES.keys()
 	var el := str(elements.pick_random())
 	var m := Summoner.create_summoner(str(RIVAL_NAMES.pick_random()), el, avg + 1)
@@ -644,25 +644,46 @@ func _preview_species(token: String) -> String:
 	return "" if token == "@any" else resolve_species(token)
 
 
+## 적 레벨 보정: 정령사 레벨 − 스테이지 권장 레벨 (원작처럼 적이 정령사 레벨을 따라간다).
+## 정령사를 키우면 적도 강해지고, 정령사가 낮으면 적도 약해진다. 1-1 고정 튜토리얼(처음)은 보정 없음.
+func stage_level_offset(stage: Dictionary) -> int:
+	if summoner == null or not stage.has("rec_level"):
+		return 0
+	if not (stage.get("script", []) as Array).is_empty() and not is_cleared(str(stage.get("id", ""))):
+		return 0
+	# 차이의 절반만큼, 최대 ±3 (모바일 호흡에 맞춰 원작보다 완만하게)
+	return clampi(int(round(float(summoner.level - int(stage["rec_level"])) * 0.5)), -3, 3)
+
+
+## 스테이지가 정한 모습 그대로 레벨만 보정한 정령 (레벨 보정으로 진화형이 되지 않게)
+func _scaled_spirit(sid: String, base_lv: int, off: int) -> Spirit:
+	var s := Spirit.create(sid, base_lv)
+	if off != 0:
+		s.level = maxi(1, base_lv + off)
+		s.full_heal()
+	return s
+
+
 ## 스테이지 전투 시작: 적 구성을 만들어 전투 씬으로
 func start_stage(stage: Dictionary) -> void:
 	current_encounter = []
 	current_rival = {}
+	var off := stage_level_offset(stage)
 	for e in stage.get("enemies", []):
-		current_encounter.append(Spirit.create(resolve_species(str(e["species"])), int(e["level"])))
+		current_encounter.append(_scaled_spirit(resolve_species(str(e["species"])), int(e["level"]), off))
 	var sm = stage.get("summoner", null)
 	if typeof(sm) == TYPE_DICTIONARY:
 		var nm := str(sm["name"])
 		if nm == "@rival":
 			nm = fill_text("{rival}")
-		var m := Summoner.create_summoner(nm, resolve_element(str(sm["element"])), int(sm["level"]))
+		var m := Summoner.create_summoner(nm, resolve_element(str(sm["element"])), maxi(1, int(sm["level"]) + off))
 		var party_list := []
 		for e in sm["party"]:
-			party_list.append(Spirit.create(resolve_species(str(e["species"])), int(e["level"])))
+			party_list.append(_scaled_spirit(resolve_species(str(e["species"])), int(e["level"]), off))
 		current_rival = {"summoner": m, "party": party_list}
 	var guardian = null
 	if stage.has("guardian"):
-		guardian = Spirit.create(resolve_species(str(stage["guardian"]["species"])), int(stage["guardian"]["level"]))
+		guardian = _scaled_spirit(resolve_species(str(stage["guardian"]["species"])), int(stage["guardian"]["level"]), off)
 	current_stage = {"id": str(stage["id"]), "name": str(stage["name"]), "guardian": guardian,
 		"terrain": stage.get("terrain", {}), "enemy_cells": [], "script": []}
 	for e in stage.get("enemies", []):

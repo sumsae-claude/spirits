@@ -262,65 +262,51 @@ func terrain_color(tid: String) -> Color:
 	return Color(float(c[0]), float(c[1]), float(c[2]))
 
 
-## 속성 지형 규칙: 숲=풀, 물가=물, 용암=불, 모래밭=바람.
-## 자기 속성 지형이면 이동 1·공격 ×1.2·받는 피해 ×0.8, 다른 속성이면 이동 2·공격 ×0.8·받는 피해 ×1.2
-const TERRAIN_OWN_ATK := 1.2
-const TERRAIN_OTHER_ATK := 0.8
-const TERRAIN_OWN_DEF := 0.8
-const TERRAIN_OTHER_DEF := 1.2
+## 지형 5단계 (원작과 같음): 지형마다 속성별 유불리 등급 ◎+20 / ○+10 / =0 / △−10 / ×−20 (terrain.json "grade").
+## 등급만큼 공격 피해 증가·받는 피해 감소·명중 보정. 불리(△·×)한 지형은 이동 비용 2 (이동력이 반으로 줄어드는 느낌).
+const GRADE_MARKS := {20: "◎", 10: "○", 0: "=", -10: "△", -20: "×"}
 
 
-func terrain_element(tid: String) -> String:
-	return str(terrain_info(tid).get("element", ""))
+func terrain_grade(tid: String, el: String) -> int:
+	return int((terrain_info(tid).get("grade", {}) as Dictionary).get(el, 0))
 
 
-## 이 지형이 정령 속성 el에게 유리(1)/불리(-1)/상관없음(0)
+func grade_mark(g: int) -> String:
+	return str(GRADE_MARKS.get(g, "="))
+
+
+## 예전 코드 호환: 유리(1)/보통(0)/불리(-1)
 func terrain_affinity(tid: String, el: String) -> int:
-	var te := terrain_element(tid)
-	if te == "":
-		return 0
-	return 1 if te == el else -1
+	return signi(terrain_grade(tid, el))
 
 
 ## 이 지형 칸에 들어갈 때 드는 이동력
 func terrain_move_cost(tid: String, el: String) -> int:
 	if not terrain_passable(tid):
 		return 99
-	match terrain_affinity(tid, el):
-		1:
-			return 1
-		-1:
-			return 2
-	return int(terrain_info(tid).get("move", 1))
+	return 2 if terrain_grade(tid, el) < 0 else int(terrain_info(tid).get("move", 1))
 
 
 ## 이 지형 위에서 공격할 때 피해 배율 (공격자 속성 기준)
 func terrain_attack_mult(tid: String, el: String) -> float:
-	match terrain_affinity(tid, el):
-		1:
-			return TERRAIN_OWN_ATK
-		-1:
-			return TERRAIN_OTHER_ATK
-	return 1.0
+	return 1.0 + float(terrain_grade(tid, el)) / 100.0
 
 
 ## 이 지형 위에서 공격받을 때 피해 배율 (방어자 속성 기준)
 func terrain_defense_mult(tid: String, el: String) -> float:
-	match terrain_affinity(tid, el):
-		1:
-			return TERRAIN_OWN_DEF
-		-1:
-			return TERRAIN_OTHER_DEF
-	return 1.0
+	return 1.0 - float(terrain_grade(tid, el)) / 100.0
 
 
-## 칸 정보에 쓰는 한 줄 설명
+## 칸 정보에 쓰는 설명: "불 ×  바람 ○  풀 △  물 ◎"
 func terrain_effect_text(tid: String) -> String:
-	var te := terrain_element(tid)
-	if te == "":
+	if not terrain_passable(tid):
 		return str(terrain_info(tid).get("desc", ""))
-	var n := element_name(te)
-	return "%s 속성 지형 — %s 정령: 이동↑ 공격↑ 방어↑ / 그 외: 이동↓ 공격↓ 방어↓" % [n, n]
+	var parts := PackedStringArray()
+	for el in ["fire", "wind", "grass", "water"]:
+		var g := terrain_grade(tid, el)
+		parts.append("%s %s%s" % [element_name(el), grade_mark(g), ("" if g == 0 else ("+" if g > 0 else "") + "%d%%" % g)])
+	var extra := str(terrain_info(tid).get("desc", "")) if tid == "circle" else ""
+	return "  ".join(parts) + ("\n" + extra if extra != "" else "")
 
 
 ## 원거리 사거리 보너스 (속성 지형 규칙으로 바뀌면서 없음)

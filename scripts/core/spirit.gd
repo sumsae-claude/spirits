@@ -16,6 +16,12 @@ var xp: int = 0
 var hp: int = 0
 var mp: int = 0
 var equipment: Dictionary = {"weapon": "", "accessory": ""}
+## 친밀도 0~100: 자주 소환하면 오르고, 귀환·쓰러짐·폭주로 내린다. 높을수록 적의 디스펠에 강하다 (원작과 같음)
+var affinity: int = 20
+
+
+func add_affinity(n: int) -> void:
+	affinity = clampi(affinity + n, 0, 100)
 
 
 static func create(p_species: String, p_level: int) -> Spirit:
@@ -53,12 +59,21 @@ func stat(key: String) -> int:
 	return int(round(value))
 
 
+## HP·MP는 최대 99 (원작과 같음)
+const VITAL_CAP := 99
+
+
 func max_hp() -> int:
-	return stat("hp")
+	return mini(VITAL_CAP, stat("hp"))
 
 
 func max_mp() -> int:
-	return stat("mp")
+	return mini(VITAL_CAP, stat("mp"))
+
+
+## 소환 유지비: 소환해 둔 동안 매 라운드 정령사 MP에서 빠진다 (종족 데이터 "cost")
+func upkeep() -> int:
+	return int(species().get("cost", 1))
 
 
 func full_heal() -> void:
@@ -157,8 +172,7 @@ func gain_xp(amount: int) -> Array[String]:
 		var old_max_mp := max_mp()
 		var old_skills := known_skills()
 		level += 1
-		hp += max_hp() - old_max_hp
-		mp += max_mp() - old_max_mp
+		full_heal()  # 레벨업하면 HP·MP 전부 회복 (원작과 같음)
 		msgs.append("%s 레벨 %d 달성!" % [display_name(), level])
 		var evo := next_evolution()
 		if not evo.is_empty() and level == int(evo["level"]):
@@ -183,6 +197,7 @@ func to_dict() -> Dictionary:
 		"hp": hp,
 		"mp": mp,
 		"equipment": equipment.duplicate(),
+		"affinity": affinity,
 	}
 
 
@@ -197,6 +212,7 @@ static func from_dict(d: Dictionary) -> Spirit:
 		for slot in GameData.SLOTS:
 			var eid := str(eq.get(slot, ""))
 			s.equipment[slot] = eid if GameData.equipment.has(eid) else ""
+	s.affinity = clampi(int(d.get("affinity", 20)), 0, 100)
 	s.hp = int(d.get("hp", 0))
 	s.mp = int(d.get("mp", 0))
 	s.clamp_vitals()

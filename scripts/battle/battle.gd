@@ -244,6 +244,8 @@ func _setup_rival(rival: Dictionary) -> void:
 	enemy_summoner_unit = _add_unit(m, 1, ENEMY_SUMMONER_CELL)
 	enemy_summoner_unit.is_summoner = true
 	enemy_bench = (rival["party"] as Array).duplicate()
+	for o in enemy_bench:
+		(o as Spirit).affinity = 50   # 적 정령사의 정령은 어느 정도 길들어 있다
 	_log("%s의 정령사 %s이(가) 승부를 걸어왔다!" % [GameData.element_name(m.element()), m.display_name()])
 	if not enemy_bench.is_empty():
 		_summon(enemy_bench[0], ENEMY_VANGUARD_CELL, false, 1)
@@ -367,6 +369,7 @@ func _summon(s: Spirit, cell: Vector2i, pay: bool, team: int) -> BattleUnit:
 		m.mp = maxi(0, m.mp - m.summon_cost(s))
 	var u := _add_unit(s, team, cell)
 	if team == 0:
+		s.add_affinity(4)  # 자주 소환할수록 친밀도 상승
 		if not participated.has(s):
 			participated.append(s)
 		_log("%s을(를) 소환했다! (다음 라운드부터 행동)" % s.display_name())
@@ -386,8 +389,50 @@ func _summon(s: Spirit, cell: Vector2i, pay: bool, team: int) -> BattleUnit:
 	return u
 
 
+## 소환 유지비: 라운드마다 소환해 둔 정령의 코스트만큼 정령사 MP가 빠진다.
+## MP가 모자라면 그 정령은 제어를 벗어나 야생으로 돌아간다 (원작과 같음). 다시 디스펠하면 돌아온다.
+func _pay_upkeep(team: int) -> void:
+	var master := _summoner_of(team)
+	if master == null or not master.is_active():
+		return
+	for o in units.duplicate():
+		var u: BattleUnit = o
+		if u.team != team or u.is_summoner or not u.is_active() or u.is_guardian:
+			continue
+		var cost := u.spirit.upkeep()
+		if master.spirit.mp >= cost:
+			master.spirit.mp -= cost
+			continue
+		_go_wild(u)
+
+
+func _go_wild(u: BattleUnit) -> void:
+	var was_ally := u.team == 0
+	u.team = 1
+	u.owned = false
+	u.done = true
+	u.joined_round = round_num
+	u.buffs = []
+	if was_ally:
+		u.spirit.add_affinity(-15)
+	_effect("폭주!", u.draw_pos + Vector2(0, -20), Color(1.0, 0.45, 0.35))
+	_add_fx("rise", u.draw_pos, Color(1.0, 0.35, 0.3), 0.9)
+	_log("MP가 모자라 %s이(가) 제어를 벗어나 야생으로 돌아갔다!%s" % [u.spirit.display_name(), " 디스펠하면 되찾을 수 있다." if was_ally else ""])
+
+
+## 다음 라운드 유지비 합계 (정보 표시·경고용)
+func _upkeep_total(team: int) -> int:
+	var total := 0
+	for o in units:
+		var u: BattleUnit = o
+		if u.team == team and not u.is_summoner and u.is_active() and not u.is_guardian:
+			total += u.spirit.upkeep()
+	return total
+
+
 func _recall(u: BattleUnit) -> void:
 	u.recalled = true
+	u.spirit.add_affinity(-5)
 	_vanish(u, "capture", COLOR_ALLY_TARGET)
 	_log("%s이(가) 정령사 곁으로 돌아왔다." % u.spirit.display_name())
 	_effect("귀환", u.draw_pos, COLOR_ALLY_TARGET)
@@ -404,7 +449,12 @@ func _start_round() -> void:
 			u.tick_buffs()
 			var regen := (u.spirit as Summoner).mp_regen() if u.is_summoner else BattleLogic.MP_REGEN_PER_ROUND
 			u.spirit.mp = mini(u.spirit.max_mp(), u.spirit.mp + regen)
+			if u.team == 0 and not u.is_summoner:
+				u.spirit.add_affinity(1)  # 전장에 함께 있는 동안 친밀도 상승
 	if round_num > 1:
+		_pay_upkeep(0)
+		_pay_upkeep(1)
+		_tick_status()
 		_apply_round_terrain()
 	if _check_end():
 		return
@@ -436,7 +486,8 @@ func _ready_allies() -> Array:
 
 
 func _is_ready(u: BattleUnit) -> bool:
-	return u != null and u.team == 0 and u.is_active() and not u.done and u.joined_round < round_num
+	return u != null and u.team == 0 and u.is_active() and not u.done and u.joined_round < round_num \
+		and u.status != "sleep" and u.status != "petrify" and u.status != "confusion"
 
 
 func _clear_selection() -> void:
@@ -508,16 +559,21 @@ func _start_enemy_phase() -> void:
 	var order := []
 	for o in units:
 		var u: BattleUnit = o
-		if u.team == 1 and u.is_active() and u.joined_round < round_num:
+		if u.is_active() and u.joined_round < round_num and (u.team == 1 or u.status == "confusion"):
 			order.append(u)
 	order.sort_custom(_compare_speed)
 	for o in order:
 		var u: BattleUnit = o
 		if not u.is_active():
 			continue
+		if u.cannot_act():
+			_log("%s은(는) %s 상태라 움직이지 못한다." % [u.spirit.display_name(), BattleUnit.STATUS_NAMES[u.status]])
+			continue
 		active = u
 		_mark_ui()
-		if u.is_summoner:
+		if u.status == "confusion":
+			await _run_confused_turn(u)
+		elif u.is_summoner:
 			await _run_enemy_summoner_turn(u)
 		else:
 			await _run_enemy_turn(u)
@@ -547,6 +603,7 @@ func _apply_round_terrain() -> void:
 			if u.spirit.hp >= u.spirit.max_hp():
 				continue
 			u.spirit.hp = mini(u.spirit.max_hp(), u.spirit.hp + amount)
+			_wake_if_healed(u)
 			_effect("+%d" % amount, u.draw_pos, Color(0.5, 1.0, 0.6))
 			_log("%s이(가) %s에서 기운을 회복했다. (+%d)" % [u.spirit.display_name(), GameData.terrain_name(tid), amount])
 		else:
@@ -638,7 +695,8 @@ func _move_cost_fn(u: BattleUnit) -> Callable:
 
 
 func _reachable_for(u: BattleUnit) -> Dictionary:
-	return grid.reachable(u.cell, u.spirit.stat("mov") + u.stat_add("mov"), _occupied(u), _move_cost_fn(u))
+	var mv := 1 if u.status == "slow" else u.spirit.stat("mov") + u.stat_add("mov")   # 지체: 이동력 1
+	return grid.reachable(u.cell, mv, _occupied(u), _move_cost_fn(u))
 
 
 func _attack_power(u: BattleUnit) -> int:
@@ -1130,6 +1188,7 @@ func _make_option(u: BattleUnit, t: BattleUnit, action: Dictionary, name_text: S
 	var title := name_text if mp_cost == 0 else "%s (MP %d)" % [name_text, mp_cost]
 	var detail := reason if reason != "" else _preview_for(u, action, t)
 	if reason == "" and _is_tab_attack(action) and t.team != u.team:
+		detail += " 명중%d%%" % int(_hit_chance(u, t, action, false))
 		var est := _expected_damage(u, u.cell, t, action)
 		if est < t.spirit.hp and _can_counter(t, u):
 			detail += " 반격-%d" % _counter_damage(t, u, false)
@@ -1323,18 +1382,8 @@ func _pending_targets_allies() -> bool:
 func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 	var s := u.spirit
 	match str(action["type"]):
-		"attack":
-			await _anim_melee(u, target, s.element())
-			var dmg := _damage(u, u.cell, target, _attack_power(u), s.element(), true)
-			_hit(u, target, dmg, "공격", s.element())
-			await _try_counter(u, target)
-		"skill":
-			var sk: Dictionary = GameData.skills[action["skill_id"]]
-			s.mp = maxi(0, s.mp - int(sk["mp"]))
-			await _anim_cast(u, target, str(sk["element"]))
-			var skill_dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), true)
-			_hit(u, target, skill_dmg, str(sk["name"]), str(sk["element"]))
-			await _try_counter(u, target)
+		"attack", "skill":
+			await _tab_attack(u, target, action)
 		"dispel":
 			s.mp = maxi(0, s.mp - GameState.summoner.dispel_cost())
 			await _anim_thread(u, target)
@@ -1344,22 +1393,233 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 		"sskill":
 			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
 			if str(ssk["type"]) == "attack":
-				await _anim_cast(u, target, str(ssk["element"]))
+				await _tab_attack(u, target, action)
 			else:
 				await _anim_hop(u, GameData.element_color(u.spirit.element()))
-			_cast_summoner_skill(u, target, ssk)
-			if str(ssk["type"]) != "attack":
+				_cast_summoner_skill(u, target, ssk)
 				_award_xp(u, BattleLogic.SUPPORT_XP, false)
-			if str(ssk["type"]) == "attack":
-				await _try_counter(u, target)
 	await get_tree().create_timer(ACTION_DELAY).timeout
+
+
+# ---------------------------------------------------------------- 공격 탭 공격: 대응(반격/방어) → 명중 → 피해 → 반격
+
+## 공격 탭의 공격 하나를 처리한다. 맞는 쪽은 먼저 '반격' 또는 '방어'로 대응한다 (원작과 같음).
+##  - 방어: 받는 피해 절반 + 회피 보너스, 반격 없음. 정령사의 공격 마법은 방어로 줄지 않는다.
+##  - 반격: 피해는 그대로, 살아남고 상대가 바로 옆이면 기본 공격으로 되받아친다.
+func _tab_attack(u: BattleUnit, target: BattleUnit, action: Dictionary) -> void:
+	var kind := str(action.get("type", ""))
+	var element := _action_element(u, action)
+	var power := _attack_power(u)
+	var name_text := "공격"
+	if kind == "skill":
+		var sk: Dictionary = GameData.skills[action["skill_id"]]
+		u.spirit.mp = maxi(0, u.spirit.mp - int(sk["mp"]))
+		power = int(sk["power"])
+		name_text = str(sk["name"])
+	elif kind == "sskill":
+		var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
+		u.spirit.mp = maxi(0, u.spirit.mp - int(ssk["mp"]))
+		power = int(ssk["power"])
+		name_text = str(ssk["name"])
+	var response: String = await _choose_response(u, target, action)
+	if response == "defend":
+		_effect("방어", target.draw_pos + Vector2(0, -34), Color(0.7, 0.85, 1.0))
+	if kind == "attack":
+		await _anim_melee(u, target, element)
+	else:
+		await _anim_cast(u, target, element)
+	if not target.is_active():
+		return
+	var chance := _hit_chance(u, target, action, response == "defend")
+	if rng.randf() * 100.0 >= chance:
+		_log("%s의 %s! 하지만 %s이(가) 피했다. (명중 %d%%)" % [u.spirit.display_name(), name_text, target.spirit.display_name(), int(chance)])
+		_effect("빗나감", target.draw_pos, Color(0.8, 0.8, 0.9))
+	else:
+		var dmg := _damage(u, u.cell, target, power, element, true)
+		if response == "defend" and kind != "sskill":
+			dmg = maxi(1, int(round(dmg * BattleLogic.DEFEND_MULT)))
+		_hit(u, target, dmg, name_text, element)
+		_apply_skill_status(u, target, action)
+	if response == "counter":
+		await _try_counter(u, target)
+
+
+## 맞는 쪽의 대응. 적은 AI가, 아군은 설정(자동 반격 / 자동 방어 / 매번 묻기)대로.
+func _choose_response(attacker: BattleUnit, target: BattleUnit, action: Dictionary) -> String:
+	if not _status_can_counter(target):
+		return "defend"   # 잠·석화 상태에선 방어만 (원작과 같음)
+	var can_counter := _can_counter(target, attacker)
+	if target.team == 1:
+		if not can_counter:
+			return "defend"
+		var expected := _expected_damage(attacker, attacker.cell, target, action)
+		return "defend" if expected >= target.spirit.hp else "counter"   # 맞으면 쓰러질 때만 방어
+	match response_mode():
+		"defend":
+			return "defend"
+		"ask":
+			return await _ask_response(attacker, target, action, can_counter)
+	return "counter" if can_counter else "defend"
+
+
+func _set_response_mode(key: String, overlay: Control) -> void:
+	GameState.flags["response_mode"] = key
+	overlay.queue_free()
+	_show_help()
+
+
+func response_mode() -> String:
+	return str(GameState.flags.get("response_mode", "counter"))
+
+
+## 명중률: 기본(기본 공격 95, 스킬은 데이터의 hit) ± 상성 20 ± 지형, 방어 중이면 민첩만큼 회피
+func _hit_chance(u: BattleUnit, target: BattleUnit, action: Dictionary, defending: bool) -> float:
+	var base := 90.0
+	match str(action.get("type", "")):
+		"skill":
+			base = float(GameData.skills[action["skill_id"]].get("hit", 80))
+		"sskill":
+			base = float(GameData.summoner_skills[action["skill_id"]].get("hit", 85))
+	base += float(u.spirit.level) * 0.5   # 레벨이 오를수록 명중률 상승 (원작: 기본 명중 → 상한 99)
+	var mult := GameData.element_multiplier(_action_element(u, action), target.spirit.element())
+	if mult > 1.0:
+		base += 20.0
+	elif mult < 1.0:
+		base -= 20.0
+	base += float(_terrain_grade(u)) * 0.5 - float(_terrain_grade(target)) * 0.5
+	if defending:
+		base -= minf(30.0, float(target.spirit.stat("spd")) * 0.6)
+	return clampf(base, 5.0, 99.0)
+
+
+## '매번 묻기': 적이 공격해 올 때 반격/방어를 직접 고른다
+func _ask_response(attacker: BattleUnit, target: BattleUnit, action: Dictionary, can_counter: bool) -> String:
+	var exp_dmg := _expected_damage(attacker, attacker.cell, target, action)
+	var magic := str(action.get("type", "")) == "sskill"
+	var def_dmg := exp_dmg if magic else maxi(1, int(round(exp_dmg * BattleLogic.DEFEND_MULT)))
+	var box := PanelContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	box.grow_vertical = Control.GROW_DIRECTION_BOTH
+	box.custom_minimum_size = Vector2(600, 0)
+	box.add_theme_stylebox_override("panel", _pill_style(Color(0.08, 0.09, 0.14, 0.97), UIKit.GOLD.darkened(0.2), 16))
+	ui_root.add_child(box)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	box.add_child(vb)
+	vb.add_child(UIKit.label("%s이(가) %s을(를) 노린다!" % [attacker.spirit.display_name(), target.spirit.display_name()], 26, UIKit.GOLD, true))
+	var choice := {"v": ""}
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	vb.add_child(row)
+	var cb := UIKit.button("반격\n받는 피해 약 %d · 되받아침" % exp_dmg if can_counter else "반격 불가\n(거리가 멂)", func(): choice["v"] = "counter", not can_counter, 96)
+	var db := UIKit.button("방어\n받는 피해 약 %d%s" % [def_dmg, " (마법은 그대로)" if magic else ""], func(): choice["v"] = "defend", false, 96)
+	row.add_child(cb)
+	row.add_child(db)
+	var old_scale := Engine.time_scale
+	Engine.time_scale = 1.0
+	while str(choice["v"]) == "":
+		await get_tree().process_frame
+	Engine.time_scale = old_scale
+	box.queue_free()
+	return str(choice["v"])
+
+
+# ---------------------------------------------------------------- 상태이상 (원작 5종)
+
+## 라운드 시작: 남은 턴 감소, 독 피해
+func _tick_status() -> void:
+	for o in units.duplicate():
+		var u: BattleUnit = o
+		if not u.is_active() or u.status == "":
+			continue
+		if u.status == "poison":
+			var dmg := maxi(1, int(round(u.spirit.max_hp() * 0.1)))
+			u.spirit.hp = maxi(0, u.spirit.hp - dmg)
+			_effect("독 -%d" % dmg, u.draw_pos, BattleUnit.STATUS_COLORS["poison"])
+			_log("%s이(가) 독으로 %d 피해를 입었다." % [u.spirit.display_name(), dmg])
+			if u.spirit.hp <= 0:
+				_knock_out(u)
+				continue
+		u.status_turns -= 1
+		if u.status_turns <= 0:
+			_log("%s의 %s 상태가 풀렸다." % [u.spirit.display_name(), BattleUnit.STATUS_NAMES[u.status]])
+			u.status = ""
+
+
+## 잠은 HP·MP가 회복되면 깬다 (원작과 같음: 마법진 위에선 라운드 시작에 풀림)
+func _wake_if_healed(u: BattleUnit) -> void:
+	if u.status == "sleep":
+		u.status = ""
+		u.status_turns = 0
+		_effect("깨어남", u.draw_pos + Vector2(0, -20), BattleUnit.STATUS_COLORS["sleep"])
+
+
+## 잠·석화 중엔 반격할 수 없다 (방어만)
+func _status_can_counter(u: BattleUnit) -> bool:
+	return not u.cannot_act()
+
+
+## 공격 스킬에 붙은 상태이상을 확률로 건다. 정령사는 혼란·석화에 걸리지 않는다.
+func _apply_skill_status(u: BattleUnit, target: BattleUnit, action: Dictionary) -> void:
+	if not target.is_active():
+		return
+	var st: Dictionary = {}
+	match str(action.get("type", "")):
+		"skill":
+			st = GameData.skills[action["skill_id"]].get("status", {})
+		"sskill":
+			st = GameData.summoner_skills[action["skill_id"]].get("status", {})
+	if st.is_empty():
+		return
+	var kind := str(st.get("type", ""))
+	if target.is_summoner and (kind == "confusion" or kind == "petrify"):
+		return
+	if rng.randf() * 100.0 >= float(st.get("chance", 30)):
+		return
+	target.status = kind
+	target.status_turns = int(st.get("turns", 3))
+	_effect(str(BattleUnit.STATUS_NAMES[kind]) + "!", target.draw_pos + Vector2(0, -34), BattleUnit.STATUS_COLORS[kind])
+	_log("%s이(가) %s 상태가 되었다! (%d라운드)" % [target.spirit.display_name(), BattleUnit.STATUS_NAMES[kind], target.status_turns])
+
+
+## 혼란: 편을 가리지 않고 가장 가까운 유닛에게 다가가 기본 공격
+func _run_confused_turn(u: BattleUnit) -> void:
+	await get_tree().create_timer(ENEMY_DELAY).timeout
+	_effect("혼란", u.draw_pos + Vector2(0, -30), BattleUnit.STATUS_COLORS["confusion"])
+	var best: BattleUnit = null
+	var best_d := 9999
+	for o in units:
+		var e: BattleUnit = o
+		if e == u or not e.is_active():
+			continue
+		var d := grid.distance(u.cell, e.cell)
+		if d < best_d:
+			best_d = d
+			best = e
+	if best == null:
+		return
+	if best_d > 1:
+		var cells := _reachable_for(u)
+		var dest := u.cell
+		var dd := best_d
+		for c in cells:
+			var d2 := grid.distance(c, best.cell)
+			if d2 < dd:
+				dd = d2
+				dest = c
+		if dest != u.cell:
+			await _animate_move(u, dest)
+		best_d = dd
+	_log("%s은(는) 혼란에 빠져 제멋대로 움직인다!" % u.spirit.display_name())
+	if best_d <= 1:
+		await _perform(u, {"type": "attack"}, best)
 
 
 # ---------------------------------------------------------------- 반격
 
-## 공격 탭의 공격(기본 공격·정령 스킬·정령사 공격 스킬)을 받고 살아남은 쪽은,
-## 공격한 상대가 기본 공격 사거리(1) 안이면 기본 공격으로 반격한다. 반격에는 다시 반격하지 않는다.
-## → 원거리 스킬로 떨어져서 치면 반격을 피할 수 있다.
+## '반격'으로 대응한 쪽이 살아남고 공격자가 기본 공격 사거리(1) 안이면 기본 공격으로 되받아친다.
+## 반격에도 명중 판정이 있고, 반격에는 다시 반격하지 않는다. 원거리 스킬로 떨어져서 치면 반격을 피할 수 있다.
 func _try_counter(attacker: BattleUnit, defender: BattleUnit) -> void:
 	if not _can_counter(defender, attacker):
 		return
@@ -1367,6 +1627,10 @@ func _try_counter(attacker: BattleUnit, defender: BattleUnit) -> void:
 	_log("%s의 반격!" % defender.spirit.display_name())
 	_tutorial("counter")
 	await _anim_melee(defender, attacker, defender.spirit.element())
+	if rng.randf() * 100.0 >= _hit_chance(defender, attacker, {"type": "attack"}, false):
+		_log("%s의 반격이 빗나갔다." % defender.spirit.display_name())
+		_effect("빗나감", attacker.draw_pos, Color(0.8, 0.8, 0.9))
+		return
 	_hit(defender, attacker, _counter_damage(defender, attacker, true), "반격", defender.spirit.element())
 
 
@@ -1500,9 +1764,19 @@ func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> 
 				var t: BattleUnit = o
 				var amount := mini(BattleLogic.heal_amount(s, t.spirit, sk), t.spirit.max_hp() - t.spirit.hp)
 				t.spirit.hp += amount
+				_wake_if_healed(t)
 				_add_fx("heal", t.draw_pos, Color(0.5, 1.0, 0.6), 0.7)
 				_effect("+%d" % amount, t.draw_pos, Color(0.5, 1.0, 0.6))
 				_log("%s의 %s! %s의 HP %d 회복" % [s.display_name(), skill_name, t.spirit.display_name(), amount])
+		"cure":
+			for o in _skill_area_units(u, target, sk):
+				var t: BattleUnit = o
+				if t.status != "":
+					_log("%s의 %s! %s의 %s이(가) 풀렸다." % [s.display_name(), skill_name, t.spirit.display_name(), BattleUnit.STATUS_NAMES[t.status]])
+					t.status = ""
+					t.status_turns = 0
+				_add_fx("heal", t.draw_pos, Color(0.85, 0.95, 1.0), 0.7)
+				_effect("정화", t.draw_pos, Color(0.85, 0.95, 1.0))
 		"buff", "debuff":
 			for o in _skill_area_units(u, target, sk):
 				var t: BattleUnit = o
@@ -1536,10 +1810,10 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 		color = Color(0.7, 0.7, 0.8)
 	var def_tid := grid.terrain_at(target.cell)
 	var atk_tid := grid.terrain_at(attacker.cell)
-	if GameData.terrain_affinity(atk_tid, attacker.spirit.element()) > 0:
-		msg += " [%s 힘]" % GameData.terrain_name(atk_tid)
-	if GameData.terrain_affinity(def_tid, target.spirit.element()) > 0:
-		msg += " [%s 보호]" % GameData.terrain_name(def_tid)
+	var ga := GameData.terrain_grade(atk_tid, attacker.spirit.element())
+	var gd := GameData.terrain_grade(def_tid, target.spirit.element())
+	if ga != 0 or gd != 0:
+		msg += " [지형 %s/%s]" % [GameData.grade_mark(ga), GameData.grade_mark(gd)]
 	_log(msg)
 	_effect(str(dmg), target.draw_pos, color)
 	_hit_react(target)
@@ -1565,6 +1839,8 @@ func _knock_out(target: BattleUnit) -> void:
 		_check_guardian_reveal(target)
 		return
 	target.alive = false
+	if target.team == 0 and not target.is_summoner:
+		target.spirit.add_affinity(-10)
 	_vanish(target, "vanish", Color(1.0, 1.0, 1.0))
 	if target.team == 1 and not target.is_summoner:
 		GameState.quest_event("defeat", target.spirit.element())  # 마을 퇴치 의뢰
@@ -1613,7 +1889,8 @@ func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
 	_log("%s이(가) 디스펠을 시도했다... (성공률 %d%%)" % [u.spirit.display_name(), pct])
 	if rng.randf() < chance:
 		target.captured = true
-		captured.append(target.spirit)
+		if not GameState.party.has(target.spirit):
+			captured.append(target.spirit)   # 폭주했던 내 정령을 되찾은 경우엔 이미 보관함에 있음
 		_award_xp(u, int(round(BattleLogic.xp_reward(target.spirit) * BattleLogic.DISPEL_XP_MULT)), true)
 		# 계약한 정령은 다음 차례부터 바로 소환할 수 있다 (HP는 깎인 그대로)
 		_vanish(target, "capture", Color(1.0, 0.85, 0.4))
@@ -1689,6 +1966,26 @@ func _run_enemy_summoner_turn(u: BattleUnit) -> void:
 			await get_tree().create_timer(ACTION_DELAY).timeout
 			return
 
+	# 적 정령사도 디스펠로 내 정령을 빼앗으려 한다 (약해진 정령, 친밀도가 낮을수록 위험)
+	var steal := _enemy_dispel_target(u, m)
+	if steal != null:
+		m.mp = maxi(0, m.mp - m.dispel_cost())
+		await _anim_thread(u, steal)
+		var chance := BattleLogic.dispel_chance(m, steal.spirit, true)
+		_log("적 정령사 %s이(가) %s에게 디스펠을 시도했다... (성공률 %d%%, 친밀도 ♥%d)" % [m.display_name(), steal.spirit.display_name(), int(round(chance * 100.0)), steal.spirit.affinity])
+		if rng.randf() < chance:
+			steal.team = 1
+			steal.owned = true
+			steal.done = true
+			steal.buffs = []
+			steal.spirit.add_affinity(-10)
+			_effect("빼앗김!", steal.draw_pos + Vector2(0, -20), COLOR_OWNED_RING)
+			_log("%s이(가) 적 정령사에게 넘어갔다! 디스펠로 되찾을 수 있다." % steal.spirit.display_name())
+		else:
+			_effect("저항!", steal.draw_pos + Vector2(0, -20), Color(0.6, 0.9, 1.0))
+		await get_tree().create_timer(ACTION_DELAY).timeout
+		return
+
 	var skill_plan := _enemy_summoner_skill_plan(u, m)
 	if not skill_plan.is_empty():
 		await _perform(u, skill_plan["action"], skill_plan["target"])
@@ -1704,6 +2001,25 @@ func _run_enemy_summoner_turn(u: BattleUnit) -> void:
 		await _perform(u, {"type": "attack"}, target)
 	else:
 		_log("적 정령사 %s은(는) 상황을 살피고 있다." % m.display_name())
+
+
+## 적 정령사가 디스펠을 노릴 내 정령: 사거리 안, HP 40% 이하, 성공률 25% 이상
+func _enemy_dispel_target(u: BattleUnit, m: Summoner) -> BattleUnit:
+	if m.mp < m.dispel_cost():
+		return null
+	var best: BattleUnit = null
+	var best_chance := 0.25
+	for o in units:
+		var e: BattleUnit = o
+		if e.team != 0 or e.is_summoner or not e.is_active():
+			continue
+		if grid.distance(u.cell, e.cell) > m.dispel_range() or e.spirit.hp * 5 > e.spirit.max_hp() * 2:
+			continue
+		var c := BattleLogic.dispel_chance(m, e.spirit, true)
+		if c > best_chance:
+			best_chance = c
+			best = e
+	return best
 
 
 ## 적 정령사 스킬 선택: HP 50% 미만 아군이 있으면 회복, 아니면 기대 피해가 가장 큰 공격 스킬
@@ -1834,10 +2150,15 @@ func _plan_enemy(u: BattleUnit) -> Dictionary:
 	return {"cell": best_cell}
 
 
-## AI가 칸을 고를 때 쓰는 지형 선호도 (자기 속성 지형 + 마법진 회복)
+## 유닛이 서 있는 칸의 지형 등급 (−20 ~ +20)
+func _terrain_grade(u: BattleUnit) -> int:
+	return GameData.terrain_grade(grid.terrain_at(u.cell), u.spirit.element())
+
+
+## AI가 칸을 고를 때 쓰는 지형 선호도 (지형 등급 + 마법진 회복)
 func _terrain_score(u: BattleUnit, cell: Vector2i) -> float:
 	var tid := grid.terrain_at(cell)
-	var score := float(GameData.terrain_affinity(tid, u.spirit.element())) * 6.0
+	var score := float(GameData.terrain_grade(tid, u.spirit.element())) * 0.3
 	score += GameData.terrain_round_hp(tid, u.spirit.element()) * 40.0
 	return score
 
@@ -1878,6 +2199,12 @@ func _draw() -> void:
 			var over := _cell_overlay(c)
 			if over.a > 0.0:
 				draw_colored_polygon(grid.corners(center, HEX_SIZE - 3.0), over)
+			if phase == "player" and active != null and not has_moved and (reachable.has(c) or c == active.cell):
+				# 이동할 칸의 지형 유불리 표시 (원작처럼 ◎ ○ = △ ×)
+				var g := GameData.terrain_grade(tid, active.spirit.element())
+				if g != 0:
+					var mcol := Color(0.55, 1.0, 0.6) if g > 0 else Color(1.0, 0.55, 0.5)
+					_draw_text(GameData.grade_mark(g), center + Vector2(HEX_SIZE * 0.42, -HEX_SIZE * 0.28), 18, mcol)
 			if phase == "placing" and place_cells.has(c) and tid == "circle":
 				# 멀리 떨어진 우리 편 마법진도 소환 자리 — 따로 반짝이게
 				draw_arc(center, HEX_SIZE * 0.8, 0.0, TAU, 36, Color(CIRCLE_ALLY, 0.6 + 0.4 * sin(time * 6.0)), 4.0)
@@ -2148,6 +2475,8 @@ func _draw_unit(u: BattleUnit) -> void:
 		var mod := Color(0.45, 0.45, 0.5) if resting else Color.WHITE
 		if u.flash > 0.0:
 			mod = mod.lerp(Color(1.0, 0.35, 0.35), u.flash)
+		if u.status == "petrify":
+			mod = mod.lerp(Color(0.62, 0.62, 0.64), 0.75)   # 석화: 회색
 		mod.a = u.fade
 		draw_texture_rect(tex, rect, false, mod)
 	else:
@@ -2165,6 +2494,7 @@ func _draw_unit(u: BattleUnit) -> void:
 	if u.team == 0 and not resting and u != active and phase in ["select", "player", "choose"]:
 		draw_circle(p + Vector2(25, -25), 6.0, Color(0.45, 1.0, 0.55))  # 행동 가능
 	_draw_buff_marks(u, p)
+	_draw_status_mark(u, p)
 	_draw_text("Lv%d" % u.spirit.level, p + Vector2(-24, -24), 13, Color(1, 1, 1, 0.9))
 	var ratio := float(u.spirit.hp) / float(maxi(1, u.spirit.max_hp()))
 	var bar := Rect2(p + Vector2(-28, 33), Vector2(56, 6))
@@ -2359,6 +2689,17 @@ func _draw_target_marks() -> void:
 			_draw_text("불리", p + Vector2(30, -26), 14, Color(0.75, 0.7, 0.75))
 
 
+## 상태이상 배지 (유닛 왼쪽 위)
+func _draw_status_mark(u: BattleUnit, p: Vector2) -> void:
+	if u.status == "":
+		return
+	var col: Color = BattleUnit.STATUS_COLORS[u.status]
+	var bp := p + Vector2(0, -52)
+	draw_circle(bp, 13.0, Color(0, 0, 0, 0.6))
+	draw_arc(bp, 13.0, 0.0, TAU, 20, col, 2.0)
+	_draw_text(str(BattleUnit.STATUS_NAMES[u.status]).left(1), bp + Vector2(0, 6), 16, col)
+
+
 func _draw_buff_marks(u: BattleUnit, p: Vector2) -> void:
 	var up := false
 	var down := false
@@ -2402,6 +2743,8 @@ func _preview_for(u: BattleUnit, action: Dictionary, t: BattleUnit) -> String:
 			match str(ssk["type"]):
 				"attack":
 					return "-%d" % _damage(u, u.cell, t, int(ssk["power"]), str(ssk["element"]), false)
+				"cure":
+					return "정화" if t.status != "" else "-"
 				"heal":
 					return "+%d" % mini(BattleLogic.heal_amount(u.spirit, t.spirit, ssk), t.spirit.max_hp() - t.spirit.hp)
 				"buff":
@@ -2631,8 +2974,16 @@ func _show_help() -> void:
 	rt.bbcode_enabled = true
 	rt.fit_content = true
 	rt.add_theme_font_size_override("normal_font_size", 22)
-	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n아군을 고르면 적 머리 위에 [color=#4de566]▲ 유리[/color] / [color=#80808f]▼ 불리[/color] 표시\n칸이 색칠된 적 = 지금 자리에서 공격할 수 있는 적\n\n[b]지형[/b] (속성 지형)\n숲=풀 · 물가=물 · 용암=불 · 모래밭=바람\n자기 속성 정령: 이동↑ 공격 ×1.2 받는 피해 ×0.8\n다른 속성 정령: 이동↓ 공격 ×0.8 받는 피해 ×1.2\n마법진: 라운드마다 HP·MP 회복, 우리 편이 차지하면 소환 가능\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
+	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n아군을 고르면 적 머리 위에 [color=#4de566]▲ 유리[/color] / [color=#80808f]▼ 불리[/color] 표시\n칸이 색칠된 적 = 지금 자리에서 공격할 수 있는 적\n\n[b]지형[/b] (속성 지형)\n숲=풀 · 물가=물 · 용암=불 · 모래밭=바람\n자기 속성 정령: 이동↑ 공격 ×1.2 받는 피해 ×0.8\n다른 속성 정령: 이동↓ 공격 ×0.8 받는 피해 ×1.2\n마법진: 라운드마다 HP·MP 회복, 우리 편이 차지하면 소환 가능\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격받으면 반격 또는 방어로 대응 — 반격: 살아남고 상대가 바로 옆이면 되받아침 / 방어: 받는 피해 절반 + 회피↑ (정령사 공격 마법은 그대로)\n명중률: 상성 유리 +20%, 불리 −20%, 지형 등급 반영\n소환한 정령은 매 라운드 유지 MP가 들고, MP가 모자라면 폭주해 야생이 됨\n상태이상: 독(매 라운드 피해)·잠(회복되면 깸)·혼란(제멋대로)·지체(이동 1)·석화(행동 불가)" % GameData.element_chart_bbcode()
 	vb.add_child(rt)
+	vb.add_child(UIKit.label("적이 공격해 올 때 대응", 24, UIKit.GOLD))
+	var rrow := HBoxContainer.new()
+	rrow.add_theme_constant_override("separation", 8)
+	vb.add_child(rrow)
+	for pair in [["counter", "자동 반격"], ["defend", "자동 방어"], ["ask", "매번 묻기"]]:
+		var key := str(pair[0])
+		var b := UIKit.button(("● " if response_mode() == key else "") + str(pair[1]), _set_response_mode.bind(key, overlay), response_mode() == key, 64)
+		rrow.add_child(b)
 	vb.add_child(UIKit.spacer())
 	vb.add_child(UIKit.button("닫기", overlay.queue_free))
 
@@ -3411,15 +3762,22 @@ func _unit_info(u: BattleUnit) -> String:
 	var tag := _unit_tag(u)
 	var extra := ""
 	if u.is_summoner:
-		extra = " 소환 %d/%d" % [_summoned_count(u.team), (s as Summoner).summon_limit()]
+		var up := _upkeep_total(u.team)
+		extra = " 소환 %d/%d 유지 MP%d/라운드%s" % [_summoned_count(u.team), (s as Summoner).summon_limit(), up,
+			" ⚠MP부족" if u.team == 0 and s.mp + (s as Summoner).mp_regen() < up else ""]
+	else:
+		extra = " ♥%d 유지%d" % [s.affinity, s.upkeep()]
 	extra += " 사거리%d" % _max_attack_range(u)
+	if u.status != "":
+		extra += "  [%s %d]" % [BattleUnit.STATUS_NAMES[u.status], u.status_turns]
 	for b in u.buffs:
 		extra += "  [%s %d]" % [b["name"], int(b["rounds"])]
-	return "[%s] %s Lv.%d %s · HP %d/%d MP %d/%d\n공%d 방%d 속%d 이동%d%s · %s" % [
+	var g := _terrain_grade(u)
+	return "[%s] %s Lv.%d %s · HP %d/%d MP %d/%d\n공%d 방%d 속%d 이동%d%s · %s%s" % [
 		tag, s.display_name(), s.level, GameData.element_name(s.element()),
 		s.hp, s.max_hp(), s.mp, s.max_mp(),
 		s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"), extra,
-		GameData.terrain_name(grid.terrain_at(u.cell))]
+		GameData.terrain_name(grid.terrain_at(u.cell)), GameData.grade_mark(g)]
 
 
 func _unit_tag(u: BattleUnit) -> String:

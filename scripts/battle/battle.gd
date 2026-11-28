@@ -61,6 +61,7 @@ var inspected_cell := Vector2i(-1, -1)  # 유닛 없는 칸을 눌렀을 때 지
 ## select(아군 고르는 중) / player(선택한 유닛 조작) / targeting / placing / busy / enemy / over
 var phase := "idle"
 var has_moved := false
+var menu_open := false   # 이동 전에는 메뉴를 숨긴다. 유닛을 한 번 더 누르면 '제자리에서 행동'으로 열림
 var move_origin := Vector2i(-1, -1)  # 이동 취소용
 var submenu := ""               # "", "attacks"(공격 탭), "sskills"(정령사 스킬), "summon"
 var pending: Dictionary = {}
@@ -121,10 +122,13 @@ var cmd_panel: PanelContainer   # 유닛 옆에 뜨는 명령 메뉴 (원작처�
 var cmd_box: VBoxContainer
 var detail_label: Label         # 아래 패널: 행동 설명
 var unit_card: HBoxContainer
-var summon_box: VBoxContainer   # 아래 패널: 소환 목록 (속성 탭 + 카드)
-var summon_tabs: HBoxContainer
-var summon_grid: GridContainer
-var summon_filter := "all"
+var bottom_panel: PanelContainer
+var summon_box: VBoxContainer   # 큰 소환 창: 목록(속성 탭·정렬) + 고른 정령 상세·장비 + 버튼
+var summon_list: SpiritList
+var summon_info: Label
+var summon_equip: EquipEditor
+var summon_buttons: HBoxContainer
+var summon_pick: Spirit = null  # 소환 창에서 고른 정령
 var end_button: Button
 var retreat_button: Button
 var log_label: Label
@@ -295,7 +299,7 @@ func _add_unit(s: Spirit, team: int, cell: Vector2i) -> BattleUnit:
 ## 지금 소환할 수 있는 계약 정령 (전장에 없고, 이번 전투에서 쓰러지지 않은)
 ## 계약한 정령 전체: 파티 + 보관함 + 이번 전투에서 막 계약한 정령
 func _all_contracted() -> Array:
-	return GameState.party + GameState.storage + captured
+	return GameState.party + captured
 
 
 ## 소환할 수 있는 정령 (쓰러지지 않았고 전장에 없는 계약 정령 전부, 보관함 포함)
@@ -334,6 +338,18 @@ func _summoner_of(team: int) -> BattleUnit:
 
 
 ## 정령사 주변의 빈 칸
+## 소환할 수 있는 칸: 정령사 바로 옆 빈 칸 + 그 진영이 차지한 마법진(우리 편 파랑 / 적 빨강) 중 빈 칸
+func _summon_cells(m: BattleUnit) -> Dictionary:
+	var result := _free_cells_around(m.cell)
+	var occ := _occupied(null)
+	var mine := CIRCLE_ALLY if m.team == 0 else CIRCLE_ENEMY
+	for c in circle_state:
+		var st: Dictionary = circle_state[c]
+		if st["to"] == mine and not occ.has(c):
+			result[c] = true
+	return result
+
+
 func _free_cells_around(c: Vector2i) -> Dictionary:
 	var occ := _occupied(null)
 	var result := {}
@@ -423,6 +439,7 @@ func _is_ready(u: BattleUnit) -> bool:
 
 func _clear_selection() -> void:
 	active = null
+	menu_open = false
 	preview_cell = Vector2i(-1, -1)
 	choose_target = null
 	summoning = false
@@ -683,17 +700,20 @@ func _on_tap(pos: Vector2) -> void:
 			if summoning:
 				_inspect(u if u != active else null, c)
 			elif not has_moved and reachable.has(c):
+				menu_open = false
+				submenu = ""
 				if c == preview_cell:
 					_move_player(c)
 				else:
 					preview_cell = c
 					_mark_ui()
 			elif u == active and not has_moved:
+				# 미리보기 중이면 미리보기 취소, 아니면 '제자리에서 행동' 메뉴 열기/닫기
 				if grid.in_bounds(preview_cell):
 					preview_cell = Vector2i(-1, -1)
-					_mark_ui()
 				else:
-					_deselect()
+					menu_open = not menu_open
+				_mark_ui()
 			elif u != null and u.team != 0 and grid.in_bounds(preview_cell) and not has_moved:
 				# 미리보기 칸으로 이동한 뒤 그 적에 대한 행동 메뉴
 				_move_then_menu(preview_cell, u)
@@ -704,6 +724,8 @@ func _on_tap(pos: Vector2) -> void:
 					_select_unit(u)
 			elif u != null and u != active and not _target_options(active, u).is_empty():
 				_open_target_menu(u)
+			elif u == null and not has_moved and submenu == "":
+				_deselect()  # 빈 곳을 누르면 선택 취소
 			else:
 				_inspect(u if u != active else null, c)
 		"choose":
@@ -930,7 +952,7 @@ func _can_recall(u: BattleUnit) -> bool:
 
 func _choose_summon(s: Spirit) -> void:
 	submenu = ""
-	var cells := _free_cells_around(active.cell)
+	var cells := _summon_cells(active)
 	if cells.is_empty():
 		_log("정령사 주변에 소환할 빈 칸이 없습니다.")
 		_mark_ui()
@@ -973,7 +995,7 @@ func _summon_stop_reason() -> String:
 		return "소환 한도 %d/%d" % [_summoned_count(), m.summon_limit()]
 	if _summonable().is_empty():
 		return "남은 계약 정령 없음"
-	if _free_cells_around(active.cell).is_empty():
+	if _summon_cells(active).is_empty():
 		return "주변에 빈 칸 없음"
 	for o in _summonable():
 		if m.mp >= m.summon_cost(o):
@@ -1505,8 +1527,11 @@ func _hit(attacker: BattleUnit, target: BattleUnit, dmg: int, action_name: Strin
 		msg += " (효과가 별로...)"
 		color = Color(0.7, 0.7, 0.8)
 	var def_tid := grid.terrain_at(target.cell)
-	if GameData.terrain_defense_mult(def_tid) < 1.0:
-		msg += " [%s 엄폐]" % GameData.terrain_name(def_tid)
+	var atk_tid := grid.terrain_at(attacker.cell)
+	if GameData.terrain_affinity(atk_tid, attacker.spirit.element()) > 0:
+		msg += " [%s 힘]" % GameData.terrain_name(atk_tid)
+	if GameData.terrain_affinity(def_tid, target.spirit.element()) > 0:
+		msg += " [%s 보호]" % GameData.terrain_name(def_tid)
 	_log(msg)
 	_effect(str(dmg), target.draw_pos, color)
 	_hit_react(target)
@@ -1533,6 +1558,8 @@ func _knock_out(target: BattleUnit) -> void:
 		return
 	target.alive = false
 	_vanish(target, "vanish", Color(1.0, 1.0, 1.0))
+	if target.team == 1 and not target.is_summoner:
+		GameState.quest_event("defeat", target.spirit.element())  # 마을 퇴치 의뢰
 	_log("%s이(가) 쓰러졌다!" % target.spirit.display_name())
 	if target.team != 1:
 		return
@@ -1734,7 +1761,7 @@ func _pick_enemy_summon(m: Summoner) -> Spirit:
 func _enemy_place_cell(u: BattleUnit) -> Vector2i:
 	var best := Vector2i(-1, -1)
 	var best_d := 9999
-	for c in _free_cells_around(u.cell):
+	for c in _summon_cells(u):
 		var d := _nearest_foe_distance(u, c)
 		if d < best_d:
 			best_d = d
@@ -1799,10 +1826,10 @@ func _plan_enemy(u: BattleUnit) -> Dictionary:
 	return {"cell": best_cell}
 
 
-## AI가 칸을 고를 때 쓰는 지형 선호도 (엄폐 + 라운드 회복/화상)
+## AI가 칸을 고를 때 쓰는 지형 선호도 (자기 속성 지형 + 마법진 회복)
 func _terrain_score(u: BattleUnit, cell: Vector2i) -> float:
 	var tid := grid.terrain_at(cell)
-	var score := (1.0 - GameData.terrain_defense_mult(tid)) * 20.0
+	var score := float(GameData.terrain_affinity(tid, u.spirit.element())) * 6.0
 	score += GameData.terrain_round_hp(tid, u.spirit.element()) * 40.0
 	return score
 
@@ -1843,6 +1870,9 @@ func _draw() -> void:
 			var over := _cell_overlay(c)
 			if over.a > 0.0:
 				draw_colored_polygon(grid.corners(center, HEX_SIZE - 3.0), over)
+			if phase == "placing" and place_cells.has(c) and tid == "circle":
+				# 멀리 떨어진 우리 편 마법진도 소환 자리 — 따로 반짝이게
+				draw_arc(center, HEX_SIZE * 0.8, 0.0, TAU, 36, Color(CIRCLE_ALLY, 0.6 + 0.4 * sin(time * 6.0)), 4.0)
 			if c == inspected_cell:
 				draw_polyline(outline, Color(0.6, 0.9, 1.0), 3.0)
 			if range_cells.has(c):
@@ -2392,6 +2422,7 @@ func _build_ui() -> void:
 
 	# ---- 아래쪽 명령 패널 (맵 바로 아래부터 화면 끝까지)
 	var panel := PanelContainer.new()
+	bottom_panel = panel
 	panel.anchor_left = 0.0
 	panel.anchor_right = 1.0
 	panel.anchor_top = 0.0
@@ -2439,22 +2470,36 @@ func _build_ui() -> void:
 	vb.add_child(detail_label)
 	summon_box = VBoxContainer.new()
 	summon_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	summon_box.add_theme_constant_override("separation", 6)
+	summon_box.add_theme_constant_override("separation", 8)
 	summon_box.visible = false
 	vb.add_child(summon_box)
-	summon_tabs = HBoxContainer.new()
-	summon_tabs.add_theme_constant_override("separation", 6)
-	summon_box.add_child(summon_tabs)
-	var sscroll := ScrollContainer.new()
-	sscroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	sscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	summon_box.add_child(sscroll)
-	summon_grid = GridContainer.new()
-	summon_grid.columns = 2
-	summon_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	summon_grid.add_theme_constant_override("h_separation", 8)
-	summon_grid.add_theme_constant_override("v_separation", 8)
-	sscroll.add_child(summon_grid)
+	summon_list = SpiritList.new()
+	summon_list.picked.connect(_pick_summon)
+	summon_box.add_child(summon_list)
+	var detail := PanelContainer.new()
+	var dst := StyleBoxFlat.new()
+	dst.bg_color = Color(0.11, 0.12, 0.18)
+	dst.border_color = UIKit.GOLD.darkened(0.35)
+	dst.set_border_width_all(2)
+	dst.set_corner_radius_all(10)
+	dst.content_margin_left = 10
+	dst.content_margin_right = 10
+	dst.content_margin_top = 8
+	dst.content_margin_bottom = 8
+	detail.add_theme_stylebox_override("panel", dst)
+	summon_box.add_child(detail)
+	var dvb := VBoxContainer.new()
+	dvb.add_theme_constant_override("separation", 6)
+	detail.add_child(dvb)
+	summon_info = UIKit.label("", 19)
+	dvb.add_child(summon_info)
+	summon_equip = EquipEditor.new()
+	summon_equip.compact = true
+	summon_equip.changed.connect(_mark_ui)
+	dvb.add_child(summon_equip)
+	summon_buttons = HBoxContainer.new()
+	summon_buttons.add_theme_constant_override("separation", 10)
+	summon_box.add_child(summon_buttons)
 	log_label = UIKit.label("", 19, UIKit.MUTED)
 	log_label.clip_text = true
 	log_label.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -2547,7 +2592,7 @@ func _show_help() -> void:
 	rt.bbcode_enabled = true
 	rt.fit_content = true
 	rt.add_theme_font_size_override("normal_font_size", 22)
-	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b]\n숲: 받는 피해 -20%%\n물가: 물↑ 불↓, 물 정령 회복\n모래밭: 이동 느림(바람은 빠름), 바람↑, 원거리 사거리 +1\n용암: 불↑, 그 밖엔 화상\n마법진: 라운드마다 HP·MP 회복\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
+	rt.text = "[b]상성[/b]  %s\n[color=#9aa3b5]▶ 방향으로 공격하면 ×1.5, 반대는 ×0.75[/color]\n적 칸 색: [color=#4de566]유리[/color] / [color=#f2cc4d]보통[/color] / [color=#80808f]불리[/color]\n\n[b]지형[/b] (속성 지형)\n숲=풀 · 물가=물 · 용암=불 · 모래밭=바람\n자기 속성 정령: 이동↑ 공격 ×1.2 받는 피해 ×0.8\n다른 속성 정령: 이동↓ 공격 ×0.8 받는 피해 ×1.2\n마법진: 라운드마다 HP·MP 회복, 우리 편이 차지하면 소환 가능\n바위: 지나갈 수 없음\n\n[b]조작[/b]\n아군을 누름 → 파란 칸(이동) → 적을 눌러 행동\n적을 누르면 주황 = 이동 범위, 빨강 = 공격 범위\n공격 탭(기본 공격·스킬·정령사 공격)으로 맞고 버틴 쪽은, 공격한 상대가 바로 옆이면 반격\n정령사 스킬(회복·버프·디버프)에는 반격 없음" % GameData.element_chart_bbcode()
 	vb.add_child(rt)
 	vb.add_child(UIKit.spacer())
 	vb.add_child(UIKit.button("닫기", overlay.queue_free))
@@ -2815,6 +2860,8 @@ func _show_script_step() -> void:
 
 func _script_advance() -> void:
 	script_i += 1
+	if _script_step_is("summon"):
+		menu_open = true  # 소환 단계: 정령사 메뉴를 바로 연다 (이동하지 않음)
 	_show_script_step()
 
 
@@ -2889,6 +2936,7 @@ func _rebuild_ui() -> void:
 		c.queue_free()
 	detail_label.text = ""
 	summon_box.visible = false
+	bottom_panel.offset_top = map_bottom + 6.0
 	detail_label.visible = true
 	unit_card.visible = true
 	log_label.visible = true
@@ -2921,10 +2969,13 @@ func _rebuild_ui() -> void:
 		"select":
 			hint_label.text = "행동할 아군을 고르세요. 초록 점 = 행동 가능, 순서 자유.\n모두 행동하면 적 턴. 일찍 끝내려면 위쪽 '턴 종료'."
 		"player":
-			if active.is_summoner:
-				_build_summoner_actions()
+			if has_moved or menu_open or summoning or submenu != "":
+				if active.is_summoner:
+					_build_summoner_actions()
+				else:
+					_build_spirit_actions()
 			else:
-				_build_spirit_actions()
+				hint_label.text = "파란 칸을 눌러 이동 (한 번 더 누르면 출발). 이동하지 않고 행동하려면 %s을(를) 한 번 더 누르세요. 빈 곳을 누르면 취소." % active.spirit.display_name()
 		"choose":
 			anchor = choose_target
 			for o in _target_options(active, choose_target):
@@ -2948,7 +2999,7 @@ func _rebuild_ui() -> void:
 			detail_label.text = _action_desc(active, pending)
 		"placing":
 			_add_action("취소", _cancel_targeting, false, "cancel")
-			hint_label.text = "%s을(를) 소환할 칸을 누르세요." % (pending["spirit"] as Spirit).display_name()
+			hint_label.text = "%s을(를) 소환할 칸을 누르세요. (정령사 옆 또는 우리 편이 차지한 파란 마법진)" % (pending["spirit"] as Spirit).display_name()
 		"enemy":
 			hint_label.text = "적이 움직이고 있다..."
 		_:
@@ -3024,13 +3075,18 @@ func _move_hint() -> String:
 
 
 func _add_common_actions() -> void:
-	if grid.in_bounds(preview_cell) and not has_moved:
-		_add_action("여기로 이동", _confirm_preview_move, false, "move_here")
 	_add_action("대기", _on_wait, false, "wait")
 	if has_moved:
 		_add_action("이동 취소", _undo_move, false, "undo")
 	else:
-		_add_action("닫기", _deselect, false, "close")
+		_add_action("닫기", _close_menu, false, "close")
+
+
+## 제자리 행동 메뉴 닫기 → 다시 이동할 칸 고르기
+func _close_menu() -> void:
+	menu_open = false
+	submenu = ""
+	_mark_ui()
 
 
 ## 공격 탭: 정령 = 기본 공격 + 스킬(최대 2) / 정령사 = 기본 공격 + 공격 스킬 + 디스펠
@@ -3102,107 +3158,97 @@ func _build_attack_tab() -> void:
 	detail_label.text = "\n".join(lines)
 
 
-## 소환 목록 (아래 패널): 계약 정령 전체를 속성 탭으로 거르고, 지금 적에게 유리한 정령부터 보여 준다.
+## 큰 소환 창: 아래 패널을 위로 키워 목록(속성 탭·정렬) + 고른 정령 상세·장비 + 소환 버튼을 보여 준다.
 func _build_summon_list() -> void:
 	unit_card.visible = false
 	detail_label.visible = false
 	log_label.visible = false
 	summon_box.visible = true
-	UIKit.clear(summon_tabs)
-	UIKit.clear(summon_grid)
-	var m := GameState.summoner
-	var full := _summoned_count() >= m.summon_limit()
-	var no_room := _free_cells_around(active.cell).is_empty()
-	var entries: Array = []
-	var counts := {"all": 0}
+	bottom_panel.offset_top = MAP_TOP + 96.0   # 화면의 약 70%
+	var cands: Array = []
 	for o in _all_contracted():
-		var s: Spirit = o
-		if _field_unit_of(s) != null:
-			continue  # 이미 전장에 있음
-		counts["all"] = int(counts["all"]) + 1
-		counts[s.element()] = int(counts.get(s.element(), 0)) + 1
-		if summon_filter != "all" and s.element() != summon_filter:
-			continue
-		var cost := m.summon_cost(s)
-		var reason := ""
-		if s.hp <= 0:
-			reason = "기절"
-		elif full:
-			reason = "한도 초과"
-		elif m.mp < cost:
-			reason = "MP 부족"
-		elif no_room:
-			reason = "빈 칸 없음"
-		entries.append({"s": s, "cost": cost, "reason": reason, "adv": _summon_advantage(s)})
-	entries.sort_custom(_summon_entry_before)
-	# 속성 탭
-	for key in ["all", "wind", "fire", "grass", "water"]:
-		var label := "전체" if key == "all" else GameData.element_name(key)
-		var tb := _hud_button("%s %d" % [label, int(counts.get(key, 0))], _set_summon_filter.bind(key))
-		tb.custom_minimum_size = Vector2(0, 44)
-		tb.add_theme_font_size_override("font_size", 18)
-		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		if key != "all":
-			tb.add_theme_color_override("font_color", GameData.element_color(key).lightened(0.35))
-		if key == summon_filter:
-			var sel := tb.get_theme_stylebox("normal") as StyleBoxFlat
-			sel.bg_color = Color(0.3, 0.24, 0.1, 0.95)
-			sel.border_color = UIKit.GOLD
-		summon_tabs.add_child(tb)
-	# 카드
-	for o in entries:
-		var e: Dictionary = o
-		var s: Spirit = e["s"]
-		var reason := str(e["reason"])
-		var tag := "  ★유리" if int(e["adv"]) > 0 else ("  불리" if int(e["adv"]) < 0 else "")
-		var b := Button.new()
-		b.text = "%s Lv%d%s\nHP %d/%d · MP %d%s" % [s.display_name(), s.level, tag, s.hp, s.max_hp(), int(e["cost"]),
-			"" if reason == "" else " · " + reason]
-		b.icon = GameData.sprite_for(s)
-		b.expand_icon = false
-		b.add_theme_constant_override("icon_max_width", 48)
-		b.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.focus_mode = Control.FOCUS_NONE
-		b.custom_minimum_size = Vector2(0, 66)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.clip_text = true
-		b.add_theme_font_size_override("font_size", 18)
-		b.add_theme_color_override("font_color", Color(1.0, 0.9, 0.55) if int(e["adv"]) > 0 else Color.WHITE)
-		b.add_theme_color_override("font_disabled_color", Color(0.6, 0.6, 0.66, 0.55))
-		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0.13, 0.14, 0.2)
-		st.border_color = GameData.element_color(s.element()).darkened(0.1)
-		st.border_width_left = 5
-		st.set_corner_radius_all(8)
-		st.content_margin_left = 10
-		b.add_theme_stylebox_override("normal", st)
-		var hv := st.duplicate() as StyleBoxFlat
-		hv.bg_color = Color(0.2, 0.2, 0.28)
-		b.add_theme_stylebox_override("hover", hv)
-		b.add_theme_stylebox_override("pressed", hv)
-		b.add_theme_stylebox_override("disabled", st)
-		b.disabled = reason != "" or not _script_allows("summon_pick")
-		b.pressed.connect(func(): _choose_summon(s))
-		summon_grid.add_child(b)
-	if entries.is_empty():
-		summon_grid.add_child(UIKit.label("소환할 수 있는 정령이 없습니다.", 20, UIKit.MUTED))
+		if _field_unit_of(o) == null:
+			cands.append(o)
+	if summon_pick != null and (not cands.has(summon_pick) or _summon_reason(summon_pick) != ""):
+		summon_pick = null
+	if summon_pick == null:
+		# 처음엔 추천 1순위 정령을 골라 둔다
+		var best_score := -999
+		for o in cands:
+			var sc := _summon_advantage(o) * 10 + (o as Spirit).level
+			if _summon_reason(o) == "" and sc > best_score:
+				best_score = sc
+				summon_pick = o
+	summon_list.setup("summon", cands, _summon_card_info, ["추천순", "레벨순", "이름순"])
+	var m := GameState.summoner
+	if summon_pick != null:
+		var s := summon_pick
+		var skills := PackedStringArray(["기본 공격"])
+		for sid in s.known_skills():
+			skills.append(str(GameData.skills[sid]["name"]))
+		summon_info.text = "%s Lv%d [%s]  HP %d/%d · MP %d/%d\n공 %d · 방 %d · 속 %d · 이동 %d · 공격 탭: %s" % [
+			s.display_name(), s.level, GameData.element_name(s.element()), s.hp, s.max_hp(), s.mp, s.max_mp(),
+			s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"), ", ".join(skills)]
+		summon_equip.visible = true
+		summon_equip.set_spirit(s)
+	else:
+		summon_info.text = "소환할 정령을 위 목록에서 고르세요."
+		summon_equip.visible = false
+	UIKit.clear(summon_buttons)
+	if summoning:
+		summon_buttons.add_child(_sheet_button("소환 완료", _on_summon_done, not _script_allows("summon_done")))
+	else:
+		summon_buttons.add_child(_sheet_button("뒤로", _close_submenu, not _script_allows("back")))
+	var cost := m.summon_cost(summon_pick) if summon_pick != null else 0
+	var go := _sheet_button("소환하기  MP %d" % cost if summon_pick != null else "소환하기",
+		_choose_picked_summon, summon_pick == null or not _script_allows("summon_pick"))
+	go.add_theme_color_override("font_color", UIKit.GOLD)
+	summon_buttons.add_child(go)
 
 
-## 소환 목록 정렬: 지금 소환 가능 → 상성 유리 → 레벨 높은 순
-func _summon_entry_before(a: Dictionary, b: Dictionary) -> bool:
-	var ra := str(a["reason"]) == ""
-	var rb := str(b["reason"]) == ""
-	if ra != rb:
-		return ra
-	if int(a["adv"]) != int(b["adv"]):
-		return int(a["adv"]) > int(b["adv"])
-	return (a["s"] as Spirit).level > (b["s"] as Spirit).level
+func _choose_picked_summon() -> void:
+	if summon_pick != null:
+		_choose_summon(summon_pick)
 
 
-func _set_summon_filter(key: String) -> void:
-	summon_filter = key
+func _sheet_button(text: String, cb: Callable, disabled: bool) -> Button:
+	var b := UIKit.button(text, cb, disabled, 64)
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 22)
+	return b
+
+
+func _pick_summon(s: Spirit) -> void:
+	summon_pick = s
 	_mark_ui()
+
+
+## 지금 소환할 수 없는 이유 ("" = 가능)
+func _summon_reason(s: Spirit) -> String:
+	var m := GameState.summoner
+	if s.hp <= 0:
+		return "기절"
+	if _summoned_count() >= m.summon_limit():
+		return "한도 초과"
+	if m.mp < m.summon_cost(s):
+		return "MP 부족"
+	if _summon_cells(active).is_empty():
+		return "빈 칸 없음"
+	return ""
+
+
+## 소환 창 카드 정보 (추천순 = 지금 전장의 적에게 유리한 정령이 위)
+func _summon_card_info(s: Spirit) -> Dictionary:
+	var reason := _summon_reason(s)
+	var adv := _summon_advantage(s)
+	return {
+		"tag": "★유리" if adv > 0 else ("불리" if adv < 0 else ""),
+		"line": "HP %d/%d · MP %d%s" % [s.hp, s.max_hp(), GameState.summoner.summon_cost(s), "" if reason == "" else " · " + reason],
+		"disabled": reason != "" or not _script_allows("summon_pick"),
+		"score": adv,
+		"gold": adv > 0,
+		"selected": s == summon_pick,
+	}
 
 
 ## 전장의 적들에 대한 상성 점수 (유리한 적 수 - 불리한 적 수)
@@ -3232,11 +3278,9 @@ func _build_summoner_actions() -> void:
 	if submenu == "summon":
 		_build_summon_list()
 		if summoning:
-			_add_action("소환 완료", _on_summon_done, false, "summon_done")
-			hint_label.text = "계속 소환하거나 옆 메뉴의 '소환 완료'를 누르세요. (%d/%d, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
+			hint_label.text = "계속 소환하거나 '소환 완료'를 누르세요. (전장 %d/%d, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
 		else:
-			_add_action("뒤로", _close_submenu, false, "back")
-			hint_label.text = "아래 목록에서 소환할 정령을 고르세요. 한 번에 여러 마리 가능 (%d/%d, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
+			hint_label.text = "정령을 고르고 장비를 확인한 뒤 '소환하기'. 여러 마리 가능 (전장 %d/%d, MP %d)" % [_summoned_count(), m.summon_limit(), m.mp]
 		return
 	if submenu == "attacks":
 		_build_attack_tab()
@@ -3333,12 +3377,12 @@ func _unit_tag(u: BattleUnit) -> String:
 func _terrain_line(c: Vector2i) -> String:
 	var tid := grid.terrain_at(c)
 	var info := GameData.terrain_info(tid)
-	return "지형: %s — %s" % [GameData.terrain_name(tid), str(info.get("desc", ""))]
+	return "지형: %s — %s" % [GameData.terrain_name(tid), GameData.terrain_effect_text(tid)]
 
 
 func _terrain_info(c: Vector2i) -> String:
 	var tid := grid.terrain_at(c)
-	var text := "[지형] %s\n%s" % [GameData.terrain_name(tid), str(GameData.terrain_info(tid).get("desc", ""))]
+	var text := "[지형] %s\n%s" % [GameData.terrain_name(tid), GameData.terrain_effect_text(tid)]
 	if active != null and GameData.terrain_passable(tid):
 		text += "\n%s의 진입 비용: %d" % [active.spirit.display_name(),
 			GameData.terrain_move_cost(tid, active.spirit.element())]

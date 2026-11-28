@@ -25,7 +25,7 @@ static func calc_damage(attacker: Spirit, defender: Spirit, power: int, element:
 	var defense := float(defender.stat("def")) * def_mult
 	var mult := GameData.element_multiplier(element, defender.element())
 	mult *= GameData.terrain_attack_mult(attacker_terrain, attacker.element())
-	mult *= GameData.terrain_defense_mult(defender_terrain)
+	mult *= GameData.terrain_defense_mult(defender_terrain, defender.element())
 	var dmg := atk * float(power) / 40.0 * 20.0 / (20.0 + defense) * mult
 	if rng != null:
 		dmg *= rng.randf_range(0.9, 1.1)

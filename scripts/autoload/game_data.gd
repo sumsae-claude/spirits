@@ -262,38 +262,75 @@ func terrain_color(tid: String) -> Color:
 	return Color(float(c[0]), float(c[1]), float(c[2]))
 
 
+## 속성 지형 규칙: 숲=풀, 물가=물, 용암=불, 모래밭=바람.
+## 자기 속성 지형이면 이동 1·공격 ×1.2·받는 피해 ×0.8, 다른 속성이면 이동 2·공격 ×0.8·받는 피해 ×1.2
+const TERRAIN_OWN_ATK := 1.2
+const TERRAIN_OTHER_ATK := 0.8
+const TERRAIN_OWN_DEF := 0.8
+const TERRAIN_OTHER_DEF := 1.2
+
+
+func terrain_element(tid: String) -> String:
+	return str(terrain_info(tid).get("element", ""))
+
+
+## 이 지형이 정령 속성 el에게 유리(1)/불리(-1)/상관없음(0)
+func terrain_affinity(tid: String, el: String) -> int:
+	var te := terrain_element(tid)
+	if te == "":
+		return 0
+	return 1 if te == el else -1
+
+
 ## 이 지형 칸에 들어갈 때 드는 이동력
 func terrain_move_cost(tid: String, el: String) -> int:
-	var t := terrain_info(tid)
-	var by: Dictionary = t.get("move_by", {})
-	return int(by.get(el, t.get("move", 1)))
+	if not terrain_passable(tid):
+		return 99
+	match terrain_affinity(tid, el):
+		1:
+			return 1
+		-1:
+			return 2
+	return int(terrain_info(tid).get("move", 1))
 
 
 ## 이 지형 위에서 공격할 때 피해 배율 (공격자 속성 기준)
 func terrain_attack_mult(tid: String, el: String) -> float:
-	var by: Dictionary = terrain_info(tid).get("attack_by", {})
-	return float(by.get(el, 1.0))
+	match terrain_affinity(tid, el):
+		1:
+			return TERRAIN_OWN_ATK
+		-1:
+			return TERRAIN_OTHER_ATK
+	return 1.0
 
 
-## 이 지형 위에서 공격받을 때 피해 배율
-func terrain_defense_mult(tid: String) -> float:
-	return float(terrain_info(tid).get("defense", 1.0))
+## 이 지형 위에서 공격받을 때 피해 배율 (방어자 속성 기준)
+func terrain_defense_mult(tid: String, el: String) -> float:
+	match terrain_affinity(tid, el):
+		1:
+			return TERRAIN_OWN_DEF
+		-1:
+			return TERRAIN_OTHER_DEF
+	return 1.0
 
 
-## 원거리(최대 사거리 2 이상) 스킬 사거리 보너스
-func terrain_range_bonus(tid: String) -> int:
-	return int(terrain_info(tid).get("range_bonus", 0))
+## 칸 정보에 쓰는 한 줄 설명
+func terrain_effect_text(tid: String) -> String:
+	var te := terrain_element(tid)
+	if te == "":
+		return str(terrain_info(tid).get("desc", ""))
+	var n := element_name(te)
+	return "%s 속성 지형 — %s 정령: 이동↑ 공격↑ 방어↑ / 그 외: 이동↓ 공격↓ 방어↓" % [n, n]
 
 
-## 라운드 시작 시 최대 HP 대비 회복(+)/피해(-) 비율
-func terrain_round_hp(tid: String, el: String) -> float:
-	var t := terrain_info(tid)
-	if t.has("regen_all"):
-		return float(t["regen_all"])
-	var regen: Dictionary = t.get("regen_by", {})
-	if regen.has(el):
-		return float(regen[el])
-	return -float(t.get("burn", 0.0))
+## 원거리 사거리 보너스 (속성 지형 규칙으로 바뀌면서 없음)
+func terrain_range_bonus(_tid: String) -> int:
+	return 0
+
+
+## 라운드 시작 시 최대 HP 대비 회복(+) 비율 — 마법진만
+func terrain_round_hp(tid: String, _el: String) -> float:
+	return float(terrain_info(tid).get("regen_all", 0.0))
 
 
 ## 라운드 시작 시 최대 MP 대비 회복 비율 (마법진)

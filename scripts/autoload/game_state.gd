@@ -3,8 +3,6 @@ extends Node
 
 const SAVE_PATH := "user://save.json"
 const SAVE_VERSION := 2
-## 전투에 데려가 소환할 수 있는 계약 정령 수 (첫 번째가 선봉)
-const MAX_PARTY := 6
 ## 정령사 속성 -> 첫 계약 정령
 const STARTERS := {"wind": "breezebird", "fire": "emberbean", "grass": "pebble", "water": "dewdrop"}
 const STARTER_LEVEL := 3
@@ -20,11 +18,13 @@ const GUARDIANS := {"wind": "guardian_wind", "fire": "guardian_fire", "grass": "
 const RIVAL_NAMES := ["카렌", "도윤", "세라", "모로", "이안", "루카", "하린", "벨"]
 
 var summoner: Summoner = null
-var party: Array = []      # Spirit
-var storage: Array = []    # Spirit
+var party: Array = []      # 계약한 정령 전부 = 보관함 (Spirit). 첫 번째가 선봉 (전투 시작 때 자동 소환)
+var storage: Array = []    # 예전 저장 데이터 호환용. 불러올 때 party로 합치므로 늘 비어 있음
 var inventory: Array = []  # 장착하지 않은 장비 id
 var battles_won: int = 0
 var gold: int = 0
+## 마을 의뢰: 의뢰 id -> {"state": "active"|"claimed", "progress": int, "el": 속성(계약·퇴치 의뢰)}
+var quests: Dictionary = {}
 ## 지금 모험 중인 챕터 번호 (GameData.chapters 기준). 지역 표식(@reg_a 등)과 전투 배경이 이 챕터 지역을 따른다.
 var active_chapter: int = 0
 var current_encounter: Array = []  # 다음 전투에 나올 야생 정령 (Spirit)
@@ -47,6 +47,7 @@ func new_game(p_name: String, element: String) -> void:
 	inventory = ["wood_wand", "leaf_charm", "conductor_staff", "sage_robe"]
 	battles_won = 0
 	gold = 50
+	quests = {}
 	active_chapter = 0
 	current_encounter = []
 	cleared_stages = []
@@ -69,6 +70,7 @@ func save_game() -> void:
 		"inventory": inventory,
 		"battles_won": battles_won,
 		"gold": gold,
+		"quests": quests,
 		"active_chapter": active_chapter,
 		"cleared_stages": cleared_stages,
 		"flags": flags,
@@ -96,7 +98,8 @@ func load_game() -> bool:
 		# 정령사가 없던 v1 저장 데이터
 		summoner = Summoner.create_summoner(DEFAULT_NAME, "fire", STARTER_LEVEL)
 	party = _load_spirits(data.get("party", []))
-	storage = _load_spirits(data.get("storage", []))
+	party.append_array(_load_spirits(data.get("storage", [])))  # 파티·보관함 구분 없앰 → 하나로
+	storage = []
 	inventory = []
 	var inv = data.get("inventory", [])
 	if typeof(inv) == TYPE_ARRAY:
@@ -105,6 +108,8 @@ func load_game() -> bool:
 				inventory.append(str(e))
 	battles_won = int(data.get("battles_won", 0))
 	gold = maxi(0, int(data.get("gold", 0)))
+	var qd = data.get("quests", {})
+	quests = qd if typeof(qd) == TYPE_DICTIONARY else {}
 	active_chapter = clampi(int(data.get("active_chapter", 0)), 0, maxi(0, GameData.chapters.size() - 1))
 	cleared_stages = []
 	var cs = data.get("cleared_stages", [])
@@ -164,30 +169,12 @@ func set_vanguard(s: Spirit) -> void:
 		party.push_front(s)
 
 
-## 계약한 정령을 파티(빈자리 있을 때) 또는 보관함에 넣고 위치 이름을 반환.
+## 계약한 정령을 보관함에 넣는다.
 func add_captured(s: Spirit) -> String:
+	quest_event("capture", s.element())
 	s.full_heal()
-	if party.size() < MAX_PARTY:
-		party.append(s)
-		return "파티 합류"
-	storage.append(s)
-	return "보관함으로 이동"
-
-
-func move_to_storage(s: Spirit) -> bool:
-	if party.size() <= 1 or not party.has(s):
-		return false
-	party.erase(s)
-	storage.append(s)
-	return true
-
-
-func move_to_party(s: Spirit) -> bool:
-	if party.size() >= MAX_PARTY or not storage.has(s):
-		return false
-	storage.erase(s)
 	party.append(s)
-	return true
+	return "보관함에 들어감"
 
 
 func equip(s: Spirit, eid: String) -> void:
@@ -342,6 +329,98 @@ func mark_visited(node_id: String) -> void:
 	if not cleared_stages.has(node_id):
 		cleared_stages.append(node_id)
 	save_game()
+
+
+# ---------------------------------------------------------------- 마을 의뢰
+
+## 데이터의 의뢰 목록 (마을 지점의 "quests")
+func quest_defs(node: Dictionary) -> Array:
+	return node.get("quests", [])
+
+
+func quest_state(qid: String) -> String:
+	if not quests.has(qid):
+		return ""
+	return str((quests[qid] as Dictionary).get("state", ""))
+
+
+func accept_quest(q: Dictionary) -> void:
+	var qid := str(q["id"])
+	if quests.has(qid):
+		return
+	quests[qid] = {"state": "active", "progress": 0, "el": resolve_element(str(q.get("element", "")))}
+	save_game()
+
+
+## 진행도 (0 ~ 목표). 지점 의뢰는 그 지점을 지나왔는지로 판단
+func quest_progress(q: Dictionary) -> int:
+	var qid := str(q["id"])
+	if str(q.get("type", "")) == "clear":
+		return 1 if is_cleared(str(q.get("target", ""))) else 0
+	if not quests.has(qid):
+		return 0
+	return int((quests[qid] as Dictionary).get("progress", 0))
+
+
+func quest_goal(q: Dictionary) -> int:
+	return 1 if str(q.get("type", "")) == "clear" else int(q.get("count", 1))
+
+
+func quest_ready(q: Dictionary) -> bool:
+	return quest_state(str(q["id"])) == "active" and quest_progress(q) >= quest_goal(q)
+
+
+## 계약(capture)·퇴치(defeat) 이벤트로 진행 중인 의뢰를 채운다
+func quest_event(kind: String, el: String) -> void:
+	for ci in GameData.chapters.size():
+		for o in chapter_nodes(ci):
+			for qo in quest_defs(o):
+				var q: Dictionary = qo
+				var qid := str(q["id"])
+				if quest_state(qid) != "active" or str(q.get("type", "")) != kind:
+					continue
+				var st: Dictionary = quests[qid]
+				var want := str(st.get("el", ""))
+				if want == "" or want == el:
+					st["progress"] = mini(quest_goal(q), int(st.get("progress", 0)) + 1)
+
+
+## 보상 받기. 받은 보상 줄 목록을 반환 (골드는 "@gold:" 줄)
+func claim_quest(q: Dictionary) -> Array[String]:
+	var lines: Array[String] = []
+	if not quest_ready(q):
+		return lines
+	(quests[str(q["id"])] as Dictionary)["state"] = "claimed"
+	var rw: Dictionary = q.get("reward", {})
+	if int(rw.get("gold", 0)) > 0:
+		gold += int(rw["gold"])
+		lines.append("@gold:%d:의뢰 보상" % int(rw["gold"]))
+	for item in rw.get("items", []):
+		if GameData.equipment.has(str(item)):
+			inventory.append(str(item))
+			lines.append("의뢰 보상: %s" % GameData.equipment_desc(str(item)))
+	save_game()
+	return lines
+
+
+## 의뢰 글의 {el}(속성 이름) 치환
+func quest_text(q: Dictionary, key: String) -> String:
+	var qid := str(q["id"])
+	var el := str((quests[qid] as Dictionary).get("el", "")) if quests.has(qid) else resolve_element(str(q.get("element", "")))
+	return fill_text(str(q.get(key, ""))).replace("{el}", GameData.element_name(el) if el != "" else "")
+
+
+## 진행 중인 의뢰 요약 (지도 패널용)
+func active_quest_lines() -> PackedStringArray:
+	var out := PackedStringArray()
+	for ci in GameData.chapters.size():
+		for o in chapter_nodes(ci):
+			for qo in quest_defs(o):
+				var q: Dictionary = qo
+				if quest_state(str(q["id"])) == "active":
+					var mark := " (보고 가능!)" if quest_ready(q) else ""
+					out.append("%s %d/%d%s" % [quest_text(q, "title"), quest_progress(q), quest_goal(q), mark])
+	return out
 
 
 ## 전투 승리 골드: 기본 + 쓰러뜨리거나 계약한 정령 레벨 합 × 3

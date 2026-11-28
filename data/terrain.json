@@ -1,39 +1,28 @@
 {
 	"plain": {
-		"name": "평지", "color": [0.17, 0.2, 0.26], "passable": true, "move": 1,
+		"name": "평지", "color": [0.17, 0.2, 0.26], "passable": true,
 		"desc": "특별한 효과 없음"
 	},
 	"forest": {
-		"name": "숲", "color": [0.13, 0.3, 0.18], "passable": true, "move": 2,
-		"move_by": {"grass": 1},
-		"defense": 0.8,
-		"desc": "이동 2 (풀 1) · 받는 피해 -20%"
+		"name": "숲", "element": "grass", "color": [0.13, 0.3, 0.18], "passable": true,
+		"desc": "풀 속성 지형"
 	},
 	"water": {
-		"name": "물가", "color": [0.12, 0.25, 0.42], "passable": true, "move": 2,
-		"move_by": {"water": 1},
-		"attack_by": {"water": 1.2, "fire": 0.8},
-		"regen_by": {"water": 0.1},
-		"desc": "이동 2 (물 1) · 물 피해 +20%, 매 라운드 회복 · 불 피해 -20%"
+		"name": "물가", "element": "water", "color": [0.12, 0.25, 0.42], "passable": true,
+		"desc": "물 속성 지형"
 	},
 	"hill": {
-		"name": "모래밭", "color": [0.62, 0.52, 0.34], "passable": true, "move": 2,
-		"move_by": {"wind": 1},
-		"attack_by": {"wind": 1.2},
-		"range_bonus": 1,
-		"desc": "발이 빠져 이동 2 (바람 1) · 탁 트여 바람 피해 +20% · 원거리 스킬 사거리 +1"
+		"name": "모래밭", "element": "wind", "color": [0.62, 0.52, 0.34], "passable": true,
+		"desc": "바람 속성 지형"
 	},
 	"lava": {
-		"name": "용암지대", "color": [0.42, 0.15, 0.1], "passable": true, "move": 1,
-		"attack_by": {"fire": 1.2},
-		"regen_by": {"fire": 0.1},
-		"burn": 0.08,
-		"desc": "불 피해 +20%, 불 정령 매 라운드 회복 · 그 외 매 라운드 8% 화상"
+		"name": "용암지대", "element": "fire", "color": [0.42, 0.15, 0.1], "passable": true,
+		"desc": "불 속성 지형"
 	},
 	"circle": {
-		"name": "마법진", "color": [0.28, 0.22, 0.45], "passable": true, "move": 1,
+		"name": "마법진", "color": [0.28, 0.22, 0.45], "passable": true,
 		"regen_all": 0.15, "mp_regen_all": 0.3,
-		"desc": "누구든 라운드 시작 시 HP 15%·MP 30% 회복"
+		"desc": "누구든 라운드 시작 시 HP 15%·MP 30% 회복 · 우리 편이 차지하면 소환 가능"
 	},
 	"rock": {
 		"name": "바위", "color": [0.12, 0.12, 0.14], "passable": false, "move": 99,

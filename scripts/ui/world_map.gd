@@ -225,7 +225,10 @@ func _draw_region(vp: Vector2) -> void:
 		if unlocked and done and (t == "battle" or t == "boss" or t == "event"):
 			mark = "✓"
 		_draw_text(mark, p + Vector2(0, 8), 22 if mark.length() <= 2 else 18, Color.WHITE)
-		_draw_text(GameState.fill_text(str(n.get("name", ""))), p + Vector2(0, radius + 26), 18,
+		var label := GameState.fill_text(str(n.get("name", "")))
+		if bool(n.get("side", false)):
+			label += " (곁길)"
+		_draw_text(label, p + Vector2(0, radius + 26), 18,
 			Color(1, 1, 1, 0.95) if unlocked else Color(0.6, 0.6, 0.65))
 	# 정령사 말
 	var tex := GameData.sprite_for(GameState.summoner)
@@ -443,7 +446,7 @@ func _build_region_panel() -> void:
 		"shop":
 			status = "언제든 들를 수 있는 상점" if unlocked else "아직 갈 수 없습니다"
 		"town":
-			status = "쉬어 갈 수 있는 마을 (회복·저장)" if unlocked else "아직 갈 수 없습니다"
+			status = "의뢰 게시판 · 저장 · 거점" if unlocked else "아직 갈 수 없습니다"
 	panel_box.add_child(UIKit.label(status, 21, UIKit.MUTED))
 	panel_box.add_child(UIKit.label(GameState.fill_text(str(n.get("desc", ""))), 23))
 	if t == "battle" or t == "boss":
@@ -462,6 +465,9 @@ func _build_region_panel() -> void:
 			if not rewards.is_empty():
 				rrow.add_child(UIKit.label(", ".join(rewards), 20, UIKit.GOOD))
 			panel_box.add_child(rrow)
+	var qlines := GameState.active_quest_lines()
+	if not qlines.is_empty():
+		panel_box.add_child(UIKit.label("의뢰: " + " · ".join(qlines), 19, Color(1.0, 0.85, 0.55)))
 	panel_box.add_child(UIKit.spacer())
 	var action := "출발"
 	var blocked := not unlocked
@@ -700,21 +706,105 @@ func _sell(eid: String) -> void:
 	_rebuild_shop.call_deferred()
 
 
-# ---- 마을: 여관에서 회복·저장, 거점으로
+# ---- 마을: 의뢰 게시판 (받기 → 진행 → 돌아와 보고), 저장, 거점으로
+
+var town_node: Dictionary = {}
+var town_msg: Array[String] = []
+
 
 func _open_town(n: Dictionary) -> void:
+	town_node = n
+	town_msg = []
+	_rebuild_town()
+
+
+func _rebuild_town() -> void:
+	var n := town_node
 	var vb := _open_overlay(GameState.fill_text(str(n.get("name", "마을"))))
-	vb.add_child(UIKit.label(GameState.fill_text(str(n.get("desc", ""))), 24, Color.WHITE, true))
-	vb.add_child(UIKit.spacer())
-	vb.add_child(UIKit.button("여관에서 쉬기 (모두 회복 · 저장)", _rest.bind(vb)))
-	vb.add_child(UIKit.button("거점으로 (정령·장비 정리)", _on_hub))
-	vb.add_child(UIKit.button("나가기", _close_overlay))
+	vb.add_child(UIKit.label(GameState.fill_text(str(n.get("desc", ""))), 22, UIKit.MUTED, true))
+	for line in town_msg:
+		vb.add_child(UIKit.reward_line(line, 22))
+	vb.add_child(UIKit.label("의뢰 게시판", 28, UIKit.GOLD))
+	var list := UIKit.scroll_list(vb)
+	var defs := GameState.quest_defs(n)
+	if defs.is_empty():
+		list.add_child(UIKit.label("지금은 붙어 있는 의뢰가 없다.", 22, UIKit.MUTED))
+	for o in defs:
+		list.add_child(_quest_card(o))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.add_child(UIKit.button("저장", _town_save, false, 64))
+	row.add_child(UIKit.button("거점으로", _on_hub, false, 64))
+	row.add_child(UIKit.button("나가기", _close_overlay, false, 64))
+	vb.add_child(row)
 
 
-func _rest(vb: VBoxContainer) -> void:
-	GameState.heal_all()
+func _quest_card(q: Dictionary) -> Control:
+	var qid := str(q["id"])
+	var state := GameState.quest_state(qid)
+	var card := PanelContainer.new()
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.16, 0.14, 0.1) if state != "claimed" else Color(0.12, 0.12, 0.14)
+	st.border_color = UIKit.GOLD.darkened(0.3) if state != "claimed" else Color(0.35, 0.35, 0.4)
+	st.set_border_width_all(2)
+	st.set_corner_radius_all(10)
+	st.content_margin_left = 14
+	st.content_margin_right = 14
+	st.content_margin_top = 10
+	st.content_margin_bottom = 10
+	card.add_theme_stylebox_override("panel", st)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 6)
+	card.add_child(vb)
+	vb.add_child(UIKit.label("%s — %s" % [GameState.quest_text(q, "title"), str(q.get("giver", ""))], 23, UIKit.GOLD if state != "claimed" else UIKit.MUTED))
+	vb.add_child(UIKit.label(GameState.quest_text(q, "desc"), 20, Color.WHITE if state != "claimed" else UIKit.MUTED))
+	var rrow := HBoxContainer.new()
+	rrow.add_theme_constant_override("separation", 8)
+	rrow.add_child(UIKit.label("보상", 19, UIKit.MUTED))
+	var rw: Dictionary = q.get("reward", {})
+	if int(rw.get("gold", 0)) > 0:
+		rrow.add_child(UIKit.gold_badge(int(rw["gold"]), 18))
+	var items := PackedStringArray()
+	for item in rw.get("items", []):
+		if GameData.equipment.has(str(item)):
+			items.append(str(GameData.equipment[str(item)]["name"]))
+	if not items.is_empty():
+		rrow.add_child(UIKit.label(", ".join(items), 19, UIKit.GOOD))
+	vb.add_child(rrow)
+	var text := "받기"
+	var cb := _accept_quest.bind(q)
+	var disabled := false
+	match state:
+		"active":
+			if GameState.quest_ready(q):
+				text = "보고하기 (보상 받기)"
+				cb = _claim_quest.bind(q)
+			else:
+				text = "진행 중 %d / %d" % [GameState.quest_progress(q), GameState.quest_goal(q)]
+				disabled = true
+		"claimed":
+			text = "완료"
+			disabled = true
+	vb.add_child(UIKit.button(text, cb, disabled, 58))
+	return card
+
+
+func _accept_quest(q: Dictionary) -> void:
+	GameState.accept_quest(q)
+	town_msg = ["의뢰를 받았다: " + GameState.quest_text(q, "title")]
+	_rebuild_town.call_deferred()
+
+
+func _claim_quest(q: Dictionary) -> void:
+	town_msg = GameState.claim_quest(q)
+	town_msg.push_front("의뢰 완료: " + GameState.quest_text(q, "title"))
+	_rebuild_town.call_deferred()
+
+
+func _town_save() -> void:
 	GameState.save_game()
-	vb.add_child(UIKit.label("푹 쉬었다. 정령사와 정령들이 모두 회복했다!", 24, UIKit.GOOD, true))
+	town_msg = ["저장했습니다."]
+	_rebuild_town.call_deferred()
 
 
 # ---- 이벤트: 대화 → 선택지 → 결과 (한 번만)

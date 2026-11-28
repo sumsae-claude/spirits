@@ -69,13 +69,25 @@ func _run() -> void:
 		return _end()
 	say("새 게임 (불)")
 	GameState.new_game("테스트", "fire")
+	var from_ch2 := OS.get_environment("SMOKE_FROM_CH2") != ""
+	if from_ch2:
+		# 1장을 깬 상태로 시작 (파티는 2장 권장 레벨 근처)
+		for o in GameState.chapter_nodes(0):
+			GameState.cleared_stages.append(str((o as Dictionary)["id"]))
+		GameState.flags["prologue_seen"] = true
+		GameState.flags["demo_end_seen"] = true
+		GameState.summoner = Summoner.create_summoner("테스트", "fire", 8)
+		GameState.party = [Spirit.create("emberbean", 8)]
+		for sid in ["breezebird", "pebble", "dewdrop", "whirlmouse"]:
+			GameState.party.append(Spirit.create(sid, 7))
+		say("2장부터 시작: 파티 %s" % _levels())
 	get_tree().change_scene_to_file("res://scenes/world_map.tscn")
 	if not await wait_scene("world_map"):
 		return _end()
 	await frames(30)
 
 	# ---- 1장
-	var nodes: Array = GameState.chapter_nodes(0)
+	var nodes: Array = GameState.chapter_nodes(0) if not from_ch2 else []
 	for i in nodes.size():
 		var n: Dictionary = nodes[i]
 		say("1장 %s %s (권장 Lv.%d, 정령사 Lv.%d, 파티 %s)" % [n["id"], n["name"], int(n.get("rec_level", 0)), GameState.summoner.level, _levels()])
@@ -91,8 +103,8 @@ func _run() -> void:
 		var wm := scene()
 		say("지도 모드: %s" % str(wm.get("mode")))
 		wm.selected_region = GameState.chapter_element(1)
-		await wm._on_enter_region()
-		await frames(30)
+		wm._on_enter_region()   # 대화는 frames()가 넘겨 준다 (await 하면 대화를 기다리다 멈춤)
+		await frames(60)
 		var n2: Array = GameState.chapter_nodes(1)
 		for i in n2.size():
 			var n: Dictionary = n2[i]
@@ -109,6 +121,10 @@ func _run() -> void:
 				"town":
 					await _do_town(i)
 		say("2장 완료? %s" % str(GameState.chapter_complete(1)))
+		# 마을에 돌아가 의뢰 보고
+		for i in n2.size():
+			if str(n2[i].get("type", "")) == "town" and GameState.is_cleared(str(n2[i]["id"])):
+				await _do_town(i)
 	# 거점도 한 번 열어 보기
 	get_tree().change_scene_to_file("res://scenes/hub.tscn")
 	await wait_scene("hub")
@@ -180,7 +196,7 @@ func _stage_trial(stage_id: String, tries: int) -> void:
 
 
 func _end() -> void:
-	say("골드 %d, 파티 %d, 보관함 %d, 정령사 Lv.%d" % [GameState.gold, GameState.party.size(), GameState.storage.size(), GameState.summoner.level])
+	say("골드 %d, 파티 %d, 보관함 %d, 정령사 Lv.%d" % [GameState.gold, GameState.party.size(), 0, GameState.summoner.level])
 	for s in GameState.party:
 		say("  %s Lv.%d" % [(s as Spirit).display_name(), (s as Spirit).level])
 	say("실패 %d건" % failures.size())
@@ -229,7 +245,8 @@ func _do_event(i: int) -> void:
 	var wm := _select_node(1, i)
 	var n: Dictionary = GameState.chapter_nodes(1)[i]
 	wm._busy = false
-	await wm._on_node_action()
+	wm._on_node_action()
+	await frames(40)
 	await frames(20)
 	var choices: Array = n.get("choices", [])
 	if choices.is_empty():
@@ -256,7 +273,8 @@ func _do_event(i: int) -> void:
 func _do_shop(i: int) -> void:
 	var wm := _select_node(1, i)
 	wm._busy = false
-	await wm._on_node_action()
+	wm._on_node_action()
+	await frames(40)
 	await frames(10)
 	var stock: Array = wm._shop_stock()
 	say("  상점 재고 %s, 골드 %d" % [str(stock), GameState.gold])
@@ -279,8 +297,19 @@ func _do_shop(i: int) -> void:
 func _do_town(i: int) -> void:
 	var wm := _select_node(1, i)
 	wm._busy = false
-	await wm._on_node_action()
+	wm._on_node_action()
+	await frames(40)
 	await frames(10)
+	var n: Dictionary = GameState.chapter_nodes(1)[i]
+	for q in GameState.quest_defs(n):
+		if GameState.quest_ready(q):
+			wm._claim_quest(q)
+			say("  의뢰 보고: %s → 골드 %d" % [q["id"], GameState.gold])
+		elif GameState.quest_state(str(q["id"])) == "":
+			wm._accept_quest(q)
+			say("  의뢰 받음: %s" % GameState.quest_text(q, "title"))
+		await frames(5)
+	say("  진행 중 의뢰: %s" % str(GameState.active_quest_lines()))
 	wm._close_overlay()
 	await frames(5)
 

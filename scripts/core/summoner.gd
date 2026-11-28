@@ -142,11 +142,7 @@ static func from_summoner_dict(d: Dictionary) -> Summoner:
 		el = "fire"
 	var s := Summoner.create_summoner(str(d.get("nickname", "리안")), el, int(d.get("level", 1)))
 	s.xp = maxi(0, int(d.get("xp", 0)))
-	var eq = d.get("equipment", {})
-	if typeof(eq) == TYPE_DICTIONARY:
-		for slot in GameData.SLOTS:
-			var eid := str(eq.get(slot, ""))
-			s.equipment[slot] = eid if GameData.equipment.has(eid) else ""
+	s.load_items(d)
 	var saved = d.get("skills", [])
 	if typeof(saved) == TYPE_ARRAY:
 		for sid in saved:

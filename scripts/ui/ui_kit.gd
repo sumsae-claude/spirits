@@ -6,6 +6,7 @@ const BG_COLOR := Color(0.08, 0.09, 0.13)
 const GOLD := Color(1.0, 0.85, 0.45)
 const MUTED := Color(0.62, 0.66, 0.75)
 const GOOD := Color(0.55, 0.95, 0.65)
+const BAD := Color(1.0, 0.55, 0.5)
 
 
 static func clear(node: Node) -> void:

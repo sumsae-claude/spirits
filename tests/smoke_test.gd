@@ -69,6 +69,8 @@ func _run() -> void:
 		return _end()
 	say("새 게임 (불)")
 	GameState.new_game("테스트", "fire")
+	# 전체 실행은 길어서 전투 연출 창은 끈다 (SMOKE_ANIM=1이면 켬. 스테이지 시험은 켠 채로)
+	GameState.flags["battle_anim"] = OS.get_environment("SMOKE_ANIM") == "1"
 	var from_ch2 := OS.get_environment("SMOKE_FROM_CH2") != ""
 	if from_ch2:
 		# 1장을 깬 상태로 시작 (파티는 2장 권장 레벨 근처)
@@ -134,6 +136,30 @@ func _run() -> void:
 		hub.selected = GameState.party[0]
 		hub._refresh()
 		await frames(20)
+	# 가방 · 합성: 약초 2개 → 회복약 (레시피 기록), 틀린 조합은 재료 1개 잃음
+	hub.selected = null
+	hub._refresh()
+	await frames(5)
+	GameState.add_item("herb", 3)
+	var cw := CraftScreen.open(hub)
+	await frames(5)
+	cw._put("herb")
+	cw._put("herb")
+	cw._craft()
+	await frames(5)
+	say("합성: %s, 레시피 %s" % [cw.message, str(GameState.known_recipes)])
+	if GameState.known_recipes.is_empty():
+		fail("합성 성공했는데 레시피가 기록되지 않음")
+	cw.mix = {"herb": 1}
+	cw._craft()
+	await frames(5)
+	say("합성 실패 시험: %s" % cw.message)
+	cw._close()
+	# 소지창: 정령사 3칸에 회복약 넣기
+	var sm := GameState.summoner
+	if GameState.inventory.has("herb_potion") and sm.free_slot() >= 0:
+		GameState.equip(sm, "herb_potion")
+	say("정령사 소지: %s" % str(sm.items))
 	# 저장 슬롯: 3번에 저장 → 요약 확인 → 창 열기 → 불러오기
 	var gold_before := GameState.gold
 	GameState.save_to_slot(3)
@@ -489,8 +515,15 @@ func _ally_turn(b: Node, u: Object) -> void:
 			await b._move_player(dest)
 			await frames(2)
 		if plan.has("action") and plan["target"].is_active():
-			b.pending = plan["action"]
-			await b._execute_player_action(plan["target"])
+			# 원작식 '공격 선택' 창을 거쳐 공격 (기술 선택 → 확인)
+			b._open_target_menu(plan["target"], plan["action"])
+			await frames(2)
+			if b.attack_confirm == null:
+				fail("공격 선택 창이 열리지 않음")
+				b.pending = plan["action"]
+				await b._execute_player_action(plan["target"])
+			else:
+				b._confirm_attack()
 		elif b._can_recall(u) and u.spirit.hp * 4 < u.spirit.max_hp():
 			await b._on_recall()
 		else:
@@ -500,6 +533,20 @@ func _ally_turn(b: Node, u: Object) -> void:
 
 func _summoner_turn(b: Node, u: Object) -> void:
 	var m: Summoner = GameState.summoner
+	# 다쳤으면 도구(회복약) 사용
+	if m.hp * 2 < m.max_hp():
+		for i in m.tool_slots():
+			var iid := str(m.items[i])
+			if str(GameData.items[iid]["effect"]["type"]) == "heal":
+				b._open_submenu("tools")
+				await frames(2)
+				b._choose_tab_action({"type": "item", "item_id": iid, "slot": int(i)})
+				await frames(2)
+				if b.targets.has(u.cell):
+					say("  도구 사용: %s" % GameData.item_name(iid))
+					await b._execute_player_action(u)
+					return
+				b._cancel_targeting()
 	# 디스펠 대상: 드러난 수호 정령 > 약해진 야생 정령
 	var target: Object = null
 	for o in b.units:
@@ -544,6 +591,26 @@ func _summoner_turn(b: Node, u: Object) -> void:
 				b._on_summon_done()
 			return
 		b._close_submenu()
+	# 사거리 안에 적이 있으면 공격 마법/기본 공격 (공격 선택 창 사용)
+	var best_act: Dictionary = {}
+	var best_t: Object = null
+	var best_d := 0
+	for o in b._attack_tab(u):
+		var act: Dictionary = o
+		if str(act["type"]) == "dispel" or m.mp < int(b._action_mp(u, act)):
+			continue
+		var ts: Dictionary = b._targets_for(u, u.cell, act)
+		for c in ts:
+			var d: int = b._expected_damage(u, u.cell, ts[c], act)
+			if d > best_d:
+				best_d = d
+				best_act = act
+				best_t = ts[c]
+	if best_t != null and (m.hp * 2 > m.max_hp() or best_d >= best_t.spirit.hp):
+		b._open_target_menu(best_t, best_act)
+		await frames(2)
+		b._confirm_attack()
+		return
 	# 할 일이 없으면 적에게서 멀어지는 칸으로 물러선다 (사람처럼 정령사를 지킴)
 	var safest: Vector2i = u.cell
 	var best_threat: int = _threat(b, u.cell)

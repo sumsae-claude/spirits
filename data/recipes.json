@@ -1,0 +1,127 @@
+[
+	{
+		"in": {
+			"herb": 2
+		},
+		"out": "herb_potion"
+	},
+	{
+		"in": {
+			"herb_potion": 2,
+			"sprout_leaf": 1
+		},
+		"out": "herb_potion2"
+	},
+	{
+		"in": {
+			"herb_potion2": 2,
+			"spirit_stone": 1
+		},
+		"out": "herb_potion3"
+	},
+	{
+		"in": {
+			"dew_crystal": 2
+		},
+		"out": "mana_water"
+	},
+	{
+		"in": {
+			"herb": 1,
+			"sprout_leaf": 1
+		},
+		"out": "clean_herb"
+	},
+	{
+		"in": {
+			"ember_shard": 2
+		},
+		"out": "ember_charm"
+	},
+	{
+		"in": {
+			"dew_crystal": 1,
+			"gale_plume": 1
+		},
+		"out": "frost_charm"
+	},
+	{
+		"in": {
+			"gale_plume": 1,
+			"spirit_stone": 1
+		},
+		"out": "bind_incense"
+	},
+	{
+		"in": {
+			"gale_plume": 2,
+			"spirit_stone": 2
+		},
+		"out": "revive_feather"
+	},
+	{
+		"in": {
+			"wood_wand": 1,
+			"ember_shard": 2
+		},
+		"out": "ember_fang"
+	},
+	{
+		"in": {
+			"wood_wand": 1,
+			"gale_plume": 2
+		},
+		"out": "reed_flute"
+	},
+	{
+		"in": {
+			"leaf_charm": 1,
+			"dew_crystal": 2
+		},
+		"out": "tide_ring"
+	},
+	{
+		"in": {
+			"stone_amulet": 1,
+			"dew_crystal": 1,
+			"gale_plume": 1
+		},
+		"out": "mist_cloak"
+	},
+	{
+		"in": {
+			"wind_boots": 1,
+			"gale_plume": 2
+		},
+		"out": "swift_band"
+	},
+	{
+		"in": {
+			"iron_claw": 1,
+			"ember_shard": 2,
+			"spirit_stone": 1
+		},
+		"out": "ember_fang"
+	},
+	{
+		"in": {
+			"mana_pearl": 1,
+			"spirit_stone": 1
+		},
+		"out": "spirit_bell"
+	},
+	{
+		"in": {
+			"sprout_leaf": 2,
+			"spirit_stone": 1
+		},
+		"out": "leaf_charm"
+	},
+	{
+		"in": {
+			"spirit_stone": 2,
+			"sprout_leaf": 1
+		},
+		"out": "stone_amulet"
+	}
+]

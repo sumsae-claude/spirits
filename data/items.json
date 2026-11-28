@@ -1,0 +1,317 @@
+{
+	"wood_wand": {
+		"name": "나무 지팡이",
+		"bonus": {
+			"atk": 3
+		},
+		"desc": "초보 정령사의 지팡이.",
+		"kind": "equip"
+	},
+	"iron_claw": {
+		"name": "강철 발톱",
+		"bonus": {
+			"atk": 6
+		},
+		"desc": "날카롭게 벼린 발톱.",
+		"kind": "equip"
+	},
+	"crystal_rod": {
+		"name": "수정 막대",
+		"bonus": {
+			"atk": 4,
+			"mp": 6
+		},
+		"desc": "마력이 깃든 수정.",
+		"kind": "equip"
+	},
+	"conductor_staff": {
+		"name": "정령사의 지휘봉",
+		"bonus": {
+			"atk": 3,
+			"mp": 6
+		},
+		"desc": "정령과 마음을 잇는 지휘봉. 정령사에게 잘 맞는다.",
+		"kind": "equip"
+	},
+	"storm_feather": {
+		"name": "폭풍 깃털",
+		"bonus": {
+			"atk": 4,
+			"spd": 3
+		},
+		"desc": "바람을 머금은 깃털.",
+		"kind": "equip"
+	},
+	"leaf_charm": {
+		"name": "잎사귀 부적",
+		"bonus": {
+			"hp": 10
+		},
+		"desc": "생명력을 북돋는 부적.",
+		"kind": "equip"
+	},
+	"stone_amulet": {
+		"name": "돌 목걸이",
+		"bonus": {
+			"def": 4
+		},
+		"desc": "몸을 단단하게 해준다.",
+		"kind": "equip"
+	},
+	"wind_boots": {
+		"name": "바람 신발",
+		"bonus": {
+			"mov": 1,
+			"spd": 1
+		},
+		"desc": "한 칸 더 멀리 움직인다.",
+		"kind": "equip"
+	},
+	"sage_robe": {
+		"name": "현자의 로브",
+		"bonus": {
+			"hp": 8,
+			"mp": 10
+		},
+		"desc": "마력을 지켜주는 로브. 정령사에게 잘 맞는다.",
+		"kind": "equip"
+	},
+	"mana_pearl": {
+		"name": "마력 진주",
+		"bonus": {
+			"mp": 8,
+			"def": 1
+		},
+		"desc": "마력이 샘솟는 진주.",
+		"kind": "equip"
+	},
+	"ember_fang": {
+		"name": "불씨 송곳니",
+		"bonus": {
+			"atk": 8
+		},
+		"price": 260,
+		"desc": "식지 않는 불씨가 깃든 송곳니. 떠돌이 상인이 판다.",
+		"kind": "equip"
+	},
+	"reed_flute": {
+		"name": "갈대 피리",
+		"bonus": {
+			"atk": 5,
+			"spd": 2
+		},
+		"price": 210,
+		"desc": "불면 정령의 발걸음이 가벼워진다.",
+		"kind": "equip"
+	},
+	"tide_ring": {
+		"name": "물결 반지",
+		"bonus": {
+			"mp": 6,
+			"def": 2
+		},
+		"price": 180,
+		"desc": "잔잔한 물결 무늬가 새겨진 반지.",
+		"kind": "equip"
+	},
+	"mist_cloak": {
+		"name": "안개 망토",
+		"bonus": {
+			"hp": 6,
+			"def": 5
+		},
+		"price": 240,
+		"desc": "안개처럼 공격을 흘려보내는 망토.",
+		"kind": "equip"
+	},
+	"swift_band": {
+		"name": "질풍 띠",
+		"bonus": {
+			"spd": 4
+		},
+		"price": 150,
+		"desc": "몸이 바람처럼 가벼워진다.",
+		"kind": "equip"
+	},
+	"revive_feather": {
+		"kind": "equip",
+		"name": "부활의 깃털",
+		"bonus": {
+			"hp": 2
+		},
+		"special": "revive",
+		"price": 600,
+		"desc": "쓰러지면 HP가 가득 찬 채 되살아난다. 여러 개를 들어도 전투마다 한 번."
+	},
+	"spirit_bell": {
+		"kind": "equip",
+		"name": "계약의 방울",
+		"bonus": {
+			"mp": 4
+		},
+		"special": "bind",
+		"price": 320,
+		"desc": "디스펠 성공률 +10%. 정령사가 들면 효과가 있다."
+	},
+	"herb_potion": {
+		"name": "회복약",
+		"effect": {
+			"type": "heal",
+			"amount": 25
+		},
+		"range": [
+			0,
+			1
+		],
+		"area": 0,
+		"price": 30,
+		"desc": "자신이나 옆 칸 1명의 HP를 25 회복.",
+		"kind": "tool"
+	},
+	"herb_potion2": {
+		"name": "상급 회복약",
+		"effect": {
+			"type": "heal",
+			"amount": 35
+		},
+		"range": [
+			0,
+			1
+		],
+		"area": 1,
+		"price": 90,
+		"desc": "고른 칸과 그 둘레 아군의 HP를 35 회복.",
+		"kind": "tool"
+	},
+	"herb_potion3": {
+		"name": "최상급 회복약",
+		"effect": {
+			"type": "heal",
+			"amount": 50
+		},
+		"range": [
+			0,
+			2
+		],
+		"area": 2,
+		"price": 240,
+		"desc": "2칸 안을 골라 반경 2칸 아군의 HP를 50 회복.",
+		"kind": "tool"
+	},
+	"mana_water": {
+		"name": "마력수",
+		"effect": {
+			"type": "mp",
+			"amount": 20
+		},
+		"range": [
+			0,
+			1
+		],
+		"area": 0,
+		"price": 50,
+		"desc": "자신이나 옆 칸 1명의 MP를 20 회복.",
+		"kind": "tool"
+	},
+	"clean_herb": {
+		"name": "정화초",
+		"effect": {
+			"type": "cure"
+		},
+		"range": [
+			0,
+			1
+		],
+		"area": 0,
+		"price": 40,
+		"desc": "자신이나 옆 칸 1명의 상태이상을 푼다.",
+		"kind": "tool"
+	},
+	"ember_charm": {
+		"name": "불씨 부적",
+		"effect": {
+			"type": "damage",
+			"amount": 18,
+			"element": "fire"
+		},
+		"range": [
+			1,
+			3
+		],
+		"area": 0,
+		"price": 70,
+		"desc": "1~3칸 떨어진 적 하나에게 불 속성 18 피해(반드시 맞음).",
+		"kind": "tool"
+	},
+	"frost_charm": {
+		"name": "물보라 부적",
+		"effect": {
+			"type": "damage",
+			"amount": 18,
+			"element": "water"
+		},
+		"range": [
+			1,
+			3
+		],
+		"area": 0,
+		"price": 70,
+		"desc": "1~3칸 떨어진 적 하나에게 물 속성 18 피해(반드시 맞음).",
+		"kind": "tool"
+	},
+	"bind_incense": {
+		"name": "매듭 향",
+		"effect": {
+			"type": "bind",
+			"amount": 20
+		},
+		"range": [
+			0,
+			0
+		],
+		"area": 0,
+		"price": 80,
+		"desc": "정령사 자신에게. 이번 전투의 다음 디스펠 성공률 +20%.",
+		"kind": "tool"
+	},
+	"herb": {
+		"name": "약초",
+		"desc": "어디서나 자라는 약초. 회복약의 재료.",
+		"kind": "material",
+		"price": 12
+	},
+	"ember_shard": {
+		"name": "불씨 조각",
+		"element": "fire",
+		"desc": "불 정령이 남긴 따뜻한 조각.",
+		"kind": "material",
+		"price": 12
+	},
+	"dew_crystal": {
+		"name": "이슬 결정",
+		"element": "water",
+		"desc": "물 정령이 남긴 맑은 결정.",
+		"kind": "material",
+		"price": 12
+	},
+	"gale_plume": {
+		"name": "바람 깃털",
+		"element": "wind",
+		"desc": "바람 정령이 남긴 가벼운 깃털.",
+		"kind": "material",
+		"price": 12
+	},
+	"sprout_leaf": {
+		"name": "새싹 잎",
+		"element": "grass",
+		"desc": "풀 정령이 남긴 싱싱한 잎.",
+		"kind": "material",
+		"price": 12
+	},
+	"spirit_stone": {
+		"name": "정령석",
+		"desc": "정령의 힘이 굳은 돌. 귀한 합성 재료.",
+		"kind": "material",
+		"price": 60
+	}
+}

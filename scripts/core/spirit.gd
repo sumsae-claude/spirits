@@ -15,9 +15,52 @@ var level: int = 1
 var xp: int = 0
 var hp: int = 0
 var mp: int = 0
-var equipment: Dictionary = {"weapon": "", "accessory": ""}
+## 소지창 3칸 (장비·도구 id, 빈 칸 ""). 장비는 능력치가 쌓이고, 도구는 전투 중에 쓴다
+var items: Array = ["", "", ""]
 ## 친밀도 0~100: 자주 소환하면 오르고, 귀환·쓰러짐·폭주로 내린다. 높을수록 적의 디스펠에 강하다 (원작과 같음)
 var affinity: int = 20
+
+
+## 이 특수 효과(revive·bind) 장비를 들었는가 (여러 개여도 효과는 한 번)
+func has_special(sp: String) -> bool:
+	for o in items:
+		if GameData.equipment.has(str(o)) and str(GameData.equipment[str(o)].get("special", "")) == sp:
+			return true
+	return false
+
+
+## 든 도구 [칸 번호...]
+func tool_slots() -> Array:
+	var out := []
+	for i in items.size():
+		if GameData.item_kind(str(items[i])) == "tool":
+			out.append(i)
+	return out
+
+
+func free_slot() -> int:
+	for i in items.size():
+		if str(items[i]) == "":
+			return i
+	return -1
+
+
+## 옛 저장(무기·장신구 칸) 또는 새 저장(3칸 배열)을 읽는다
+func load_items(d: Dictionary) -> void:
+	items = ["", "", ""]
+	var arr = d.get("items", null)
+	if typeof(arr) == TYPE_ARRAY:
+		for i in mini(arr.size(), GameData.HOLD_SLOTS):
+			items[i] = str(arr[i]) if GameData.holdable(str(arr[i])) else ""
+		return
+	var eq = d.get("equipment", {})
+	if typeof(eq) == TYPE_DICTIONARY:
+		var i := 0
+		for slot in ["weapon", "accessory"]:
+			var eid := str(eq.get(slot, ""))
+			if GameData.holdable(eid):
+				items[i] = eid
+				i += 1
 
 
 func add_affinity(n: int) -> void:
@@ -52,10 +95,10 @@ func display_name() -> String:
 func stat(key: String) -> int:
 	var sp := species()
 	var value: float = float(sp["base"].get(key, 0)) + float(sp["growth"].get(key, 0)) * float(level - 1)
-	for slot in equipment:
-		var eid: String = equipment[slot]
-		if eid != "" and GameData.equipment.has(eid):
-			value += float(GameData.equipment[eid]["bonus"].get(key, 0))
+	for o in items:
+		var eid := str(o)
+		if GameData.equipment.has(eid):
+			value += float(GameData.equipment[eid].get("bonus", {}).get(key, 0))
 	return int(round(value))
 
 
@@ -196,7 +239,7 @@ func to_dict() -> Dictionary:
 		"xp": xp,
 		"hp": hp,
 		"mp": mp,
-		"equipment": equipment.duplicate(),
+		"items": items.duplicate(),
 		"affinity": affinity,
 	}
 
@@ -207,11 +250,7 @@ static func from_dict(d: Dictionary) -> Spirit:
 	s.nickname = str(d.get("nickname", ""))
 	s.level = maxi(1, int(d.get("level", 1)))
 	s.xp = maxi(0, int(d.get("xp", 0)))
-	var eq = d.get("equipment", {})
-	if typeof(eq) == TYPE_DICTIONARY:
-		for slot in GameData.SLOTS:
-			var eid := str(eq.get(slot, ""))
-			s.equipment[slot] = eid if GameData.equipment.has(eid) else ""
+	s.load_items(d)
 	s.affinity = clampi(int(d.get("affinity", 20)), 0, 100)
 	s.hp = int(d.get("hp", 0))
 	s.mp = int(d.get("mp", 0))

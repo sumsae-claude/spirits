@@ -2,7 +2,6 @@ extends Control
 ## 거점 화면: 정령사 정보, 보관함(계약 정령 전부, 속성 탭·정렬), 선봉 지정, 진화, 장비 장착, 전투 출발.
 
 var selected: Spirit = null
-var picking_slot := ""
 var message := ""
 
 
@@ -35,7 +34,7 @@ func _build_list(vb: VBoxContainer) -> void:
 	var g := UIKit.gold_badge(GameState.gold, 24)
 	g.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	top.add_child(g)
-	top.add_child(UIKit.label("승리 %d회 · 파티 평균 Lv.%d · 보유 장비 %d개" % [
+	top.add_child(UIKit.label("승리 %d회 · 파티 평균 Lv.%d · 가방 %d개" % [
 		GameState.battles_won, GameState.average_party_level(), GameState.inventory.size()], 22, UIKit.MUTED))
 	vb.add_child(top)
 	if message != "":
@@ -53,6 +52,12 @@ func _build_list(vb: VBoxContainer) -> void:
 	adv.add_theme_font_size_override("font_size", 30)
 	adv.add_theme_color_override("font_color", UIKit.GOLD)
 	vb.add_child(adv)
+	var row0 := HBoxContainer.new()
+	row0.add_theme_constant_override("separation", 12)
+	var cb := UIKit.button("⚗ 가방 · 합성", _on_craft, false, 72)
+	cb.add_theme_color_override("font_color", Color(0.8, 0.7, 1.0))
+	row0.add_child(cb)
+	vb.add_child(row0)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	row.add_child(UIKit.button("사냥터 (야생)", _on_explore))
@@ -68,10 +73,9 @@ func _build_list(vb: VBoxContainer) -> void:
 ## 정령사 카드: 누르면 상세(장비 변경) 화면
 func _summoner_card() -> Button:
 	var m := GameState.summoner
-	var text := "%s\nHP %d · MP %d · 공 %d · 방 %d · 이동 %d   EXP %d/%d\n동시 소환 %d · 장비: %s / %s\n▸ 눌러서 장비 변경" % [
+	var text := "%s\nHP %d · MP %d · 공 %d · 방 %d · 이동 %d   EXP %d/%d\n동시 소환 %d · 소지: %s\n▸ 눌러서 소지품 변경" % [
 		m.summary(), m.max_hp(), m.max_mp(), m.stat("atk"), m.stat("def"), m.stat("mov"),
-		m.xp, m.xp_to_next(), m.summon_limit(),
-		_equip_short(m, "weapon"), _equip_short(m, "accessory")]
+		m.xp, m.xp_to_next(), m.summon_limit(), _items_short(m)]
 	var b := UIKit.button(text, func(): _select(m), false, 140)
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_set_icon(b, m)
@@ -91,9 +95,12 @@ func _set_icon(b: Button, s: Spirit) -> void:
 	b.add_theme_constant_override("icon_max_width", 72)
 
 
-func _equip_short(s: Spirit, slot: String) -> String:
-	var eid := str(s.equipment.get(slot, ""))
-	return str(GameData.equipment[eid]["name"]) if GameData.equipment.has(eid) else "없음"
+func _items_short(s: Spirit) -> String:
+	var names := PackedStringArray()
+	for o in s.items:
+		if str(o) != "":
+			names.append(GameData.item_name(str(o)))
+	return " / ".join(names) if not names.is_empty() else "없음"
 
 
 ## 보관함 카드 정보: 기본순 = 선봉 → 진화 가능 → 레벨
@@ -126,7 +133,6 @@ func _spirit_button(s: Spirit, vanguard: bool = false) -> Button:
 
 func _select(s: Spirit) -> void:
 	selected = s
-	picking_slot = ""
 	message = ""
 	_refresh()
 
@@ -224,8 +230,8 @@ func _build_detail(vb: VBoxContainer) -> void:
 		for entry in s.upcoming_skills():
 			list.add_child(UIKit.label("(Lv.%d 습득) %s" % [entry["level"], _skill_text(entry["id"])], 22, UIKit.MUTED))
 
-	# 장비 (전투 소환 창과 같은 장비 칸)
-	list.add_child(UIKit.label("장비", 30))
+	# 소지창 3칸 (전투 소환 창과 같음)
+	list.add_child(UIKit.label("소지품 (3칸 · 장비·도구)", 30))
 	var ed := EquipEditor.new()
 	ed.set_spirit(s)
 	ed.changed.connect(_refresh)
@@ -261,41 +267,9 @@ func _skill_text(sid: String) -> String:
 		int(sk["range_min"]), int(sk["range_max"])]
 
 
-func _build_slot_picker(list: VBoxContainer, slot: String, current: String) -> void:
-	var counts := {}
-	for item in GameState.inventory:
-		if str(GameData.equipment[item]["slot"]) == slot:
-			counts[item] = int(counts.get(item, 0)) + 1
-	for item in counts:
-		var b := UIKit.button("   ▸ 장착: %s ×%d" % [GameData.equipment_desc(item), counts[item]], func(): _equip(item), false, 64)
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.add_theme_font_size_override("font_size", 22)
-		list.add_child(b)
-	if current != "":
-		list.add_child(UIKit.button("   ▸ 장비 해제", func(): _unequip(slot), false, 64))
-	if counts.is_empty() and current == "":
-		list.add_child(UIKit.label("   장착할 수 있는 장비가 없습니다.", 22, UIKit.MUTED))
-
-
-func _toggle_slot(slot: String) -> void:
-	picking_slot = "" if picking_slot == slot else slot
-	_refresh()
-
-
-func _equip(eid: String) -> void:
-	GameState.equip(selected, eid)
-	picking_slot = ""
-	message = "장착: %s" % GameData.equipment[eid]["name"]
-	GameState.save_game()
-	_refresh()
-
-
-func _unequip(slot: String) -> void:
-	GameState.unequip(selected, slot)
-	picking_slot = ""
-	message = "장비를 해제했습니다."
-	GameState.save_game()
-	_refresh()
+func _on_craft() -> void:
+	var w := CraftScreen.open(self)
+	w.closed.connect(_refresh)
 
 
 func _on_vanguard() -> void:
@@ -307,6 +281,5 @@ func _on_vanguard() -> void:
 
 func _on_back() -> void:
 	selected = null
-	picking_slot = ""
 	message = ""
 	_refresh()

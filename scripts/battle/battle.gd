@@ -43,6 +43,15 @@ const COLOR_ADV_GOOD := Color(0.3, 0.9, 0.4)    # 상성 유리
 const COLOR_ADV_EVEN := Color(0.95, 0.8, 0.3)   # 보통
 const COLOR_ADV_BAD := Color(0.5, 0.5, 0.58)    # 불리
 const COLOR_INSPECT_THREAT := Color(0.9, 0.25, 0.3)
+const COLOR_TOOL := Color(0.75, 0.5, 1.0)       # 도구 범위
+const COLOR_MOVE_LINE := Color(1.0, 1.0, 1.0, 0.85)  # 이동 범위 = 흰 테두리 (원작처럼)
+## 아이템: 전투 맵 보물 칸 {칸: 아이템 id}, 이번 전투에서 얻은 것
+var treasure: Dictionary = {}
+var battle_loot: Array = []
+var picked_this_move := false
+var attack_confirm: Control = null   # '공격 선택' 확인창 (원작처럼 기술·명중·피해 비교 후 확인)
+var confirm_pick := 0
+var status_holder: VBoxContainer     # 아래 패널의 유닛 상태창 (원작처럼 능력치·공격 3칸·소지품 3칸)
 
 var grid: HexGrid
 var units: Array = []        # 전장에 있는 BattleUnit (귀환하면 빠진다)
@@ -211,6 +220,7 @@ func _setup_units() -> void:
 			for p in fixed[tid]:
 				_set_terrain(Vector2i(int(p[0]), int(p[1])), str(tid))
 	rng.randomize()
+	_place_treasure()
 	summoner_unit = _add_unit(GameState.summoner, 0, SUMMONER_CELL)
 	summoner_unit.is_summoner = true
 	var bench := _summonable()
@@ -237,6 +247,24 @@ func _setup_units() -> void:
 		_log("[%s] %s" % [stage["id"], stage["name"]])
 	GameState.current_encounter = []
 	GameState.current_rival = {}
+
+
+## 보물 칸 1~2개 (가운데 줄 근처의 빈 땅). 1-1 튜토리얼은 없음
+func _place_treasure() -> void:
+	if str(stage.get("id", "")) == "1-1":
+		return
+	var cands := []
+	for row in range(4, 9):
+		for col in COLS:
+			var c := Vector2i(col, row)
+			if not grid.blocked.has(c) and grid.terrain_at(c) != "circle":
+				cands.append(c)
+	var n := 1 + rng.randi() % 2
+	for i in n:
+		if cands.is_empty():
+			break
+		var c: Vector2i = cands.pop_at(rng.randi() % cands.size())
+		treasure[c] = GameData.random_tool(rng) if rng.randf() < 0.3 else GameData.random_material(rng)
 
 
 func _setup_rival(rival: Dictionary) -> void:
@@ -662,6 +690,8 @@ func _finish(victory: bool) -> void:
 			var eid := GameData.random_equipment(rng)
 			GameState.inventory.append(eid)
 			lines.append("장비 획득: %s" % GameData.equipment_desc(eid))
+		if rng.randf() < 0.5:
+			battle_loot.append(GameData.random_material(rng))
 		GameState.battles_won += 1
 		if not stage.is_empty():
 			lines.append_array(GameState.complete_stage(str(stage["id"])))
@@ -669,6 +699,13 @@ func _finish(victory: bool) -> void:
 		lines.append("%s이(가) 쓰러졌다..." % GameState.summoner.display_name())
 		lines.append("정령들과 함께 돌아가 회복합니다." + (" 월드맵에서 다시 도전할 수 있어요." if not stage.is_empty() else ""))
 	lines.append_array(_xp_summary())
+	if not battle_loot.is_empty():
+		var names := PackedStringArray()
+		for iid in battle_loot:
+			GameState.add_item(str(iid))
+			names.append(GameData.item_name(str(iid)))
+		lines.append("주운 것: " + ", ".join(names))
+		battle_loot = []
 	lines.append_array(_keep_captured())
 	GameState.heal_all()
 	GameState.save_game()
@@ -794,7 +831,14 @@ func _on_tap(pos: Vector2) -> void:
 			else:
 				_cancel_choose()
 		"targeting":
-			if targets.has(c):
+			if targets.has(c) and not _script_active() and (_is_tab_attack(pending) or str(pending.get("type", "")) == "dispel") \
+					and (targets[c] as BattleUnit).team != active.team:
+				var pre := pending
+				var tu: BattleUnit = targets[c]
+				pending = {}
+				targets = {}
+				_open_target_menu(tu, pre)
+			elif targets.has(c):
 				_execute_player_action(targets[c])
 			else:
 				_cancel_targeting()
@@ -929,6 +973,14 @@ func _move_player(c: Vector2i) -> void:
 	await _animate_move(active, c)
 	has_moved = true
 	reachable = {}
+	picked_this_move = false
+	if treasure.has(c):
+		var iid := str(treasure[c])
+		treasure.erase(c)
+		battle_loot.append(iid)
+		picked_this_move = true
+		_effect("획득: " + GameData.item_name(iid), active.draw_pos + Vector2(0, -24), UIKit.GOLD)
+		_log("%s이(가) 보물을 주웠다: %s (전투가 끝나면 가방으로)" % [active.spirit.display_name(), GameData.item_name(iid)])
 	phase = "player"
 	_mark_ui()
 	_tutorial("moved")
@@ -948,6 +1000,9 @@ func _confirm_preview_move() -> void:
 
 func _undo_move() -> void:
 	if phase != "player" or not has_moved or summoning:
+		return
+	if picked_this_move:
+		_log("보물을 주워서 이동을 되돌릴 수 없습니다.")
 		return
 	phase = "busy"
 	submenu = ""
@@ -1123,18 +1178,284 @@ func _on_retreat() -> void:
 
 # ---------------------------------------------------------------- 대상을 눌러 행동 고르기
 
-func _open_target_menu(t: BattleUnit) -> void:
+func _open_target_menu(t: BattleUnit, preselect: Dictionary = {}) -> void:
 	choose_target = t
 	inspected = t
 	inspected_cell = Vector2i(-1, -1)
 	targets = {t.cell: t}
 	submenu = ""
 	phase = "choose"
+	if t.team != active.team and not _script_active():
+		# 원작처럼 '공격 선택' 창: 쓸 기술을 고르고 명중·피해·반격을 비교한 뒤 확인
+		var opts := _target_options(active, t)
+		confirm_pick = 0
+		for i in opts.size():
+			if bool(opts[i]["ok"]):
+				confirm_pick = i
+				break
+		for i in opts.size():
+			if not preselect.is_empty() and str(opts[i]["action"].get("type", "")) == str(preselect.get("type", "")) \
+					and str(opts[i]["action"].get("skill_id", "")) == str(preselect.get("skill_id", "")) and bool(opts[i]["ok"]):
+				confirm_pick = i
+		_show_attack_confirm()
 	_mark_ui()
 	_tutorial("choose")
 
 
+func _close_attack_confirm() -> void:
+	if attack_confirm != null:
+		attack_confirm.queue_free()
+		attack_confirm = null
+
+
+func _show_attack_confirm() -> void:
+	_close_attack_confirm()
+	var u := active
+	var t := choose_target
+	var overlay := ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.4)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui_root.add_child(overlay)
+	attack_confirm = overlay
+	var panel := _window_panel("공격 선택")
+	panel.position = Vector2(16, 200)
+	panel.custom_minimum_size = Vector2(688, 0)
+	overlay.add_child(panel)
+	var vb: VBoxContainer = panel.get_child(0)
+	var opts := _target_options(u, t)
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 10)
+	vb.add_child(cols)
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_stretch_ratio = 1.6
+	left.add_theme_constant_override("separation", 4)
+	cols.add_child(left)
+	left.add_child(UIKit.label("공격 · MP", 18, Color(0.6, 0.85, 1.0)))
+	for i in opts.size():
+		var opt: Dictionary = opts[i]
+		var act: Dictionary = opt["action"]
+		var mp := _action_mp(u, act)
+		var title := _action_name(u, act) + ("  MP%d" % mp if mp > 0 else "")
+		var b := _window_button("%s\n%s" % [title, _action_detail(u, t, act) if bool(opt["ok"]) else str(opt["label"]).get_slice("\n", 1)],
+			_confirm_select.bind(i), not bool(opt["ok"]), i == confirm_pick)
+		left.add_child(b)
+	var right := VBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.add_theme_constant_override("separation", 4)
+	cols.add_child(right)
+	right.add_child(UIKit.label("대응 (상대)", 18, Color(1.0, 0.6, 0.55)))
+	var action: Dictionary = opts[confirm_pick]["action"] if confirm_pick < opts.size() else {"type": "attack"}
+	if _is_tab_attack(action):
+		var resp := _predict_response(u, t, action)
+		var rtext := "방어\n피해 절반 · 회피↑" if resp == "defend" else "반격 — 기본 공격\n명중%d%% 피해 %d" % [int(_hit_chance(t, u, {"type": "attack"}, false)), _counter_damage(t, u, false)]
+		if resp == "counter" and _expected_damage(u, u.cell, t, action) >= t.spirit.hp:
+			rtext = "반격 (쓰러지면 못 함)"
+		right.add_child(_window_button(rtext, Callable(), true, true))
+	elif str(action.get("type", "")) == "dispel":
+		right.add_child(_window_button("저항\n친밀도·레벨에 따라", Callable(), true, true))
+	else:
+		right.add_child(_window_button("—", Callable(), true, true))
+	vb.add_child(_compare_card(u, t, action, _predict_response(u, t, action) if _is_tab_attack(action) else ""))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	vb.add_child(row)
+	var ok_disabled := opts.is_empty() or not bool(opts[confirm_pick]["ok"])
+	var ok := UIKit.button("확인", _confirm_attack, ok_disabled, 62)
+	ok.add_theme_color_override("font_color", UIKit.GOLD)
+	row.add_child(ok)
+	row.add_child(UIKit.button("취소", _cancel_choose, false, 62))
+
+
+func _confirm_select(i: int) -> void:
+	confirm_pick = i
+	_show_attack_confirm.call_deferred()
+
+
+func _confirm_attack() -> void:
+	var opts := _target_options(active, choose_target)
+	if confirm_pick >= opts.size() or not bool(opts[confirm_pick]["ok"]):
+		return
+	var act: Dictionary = opts[confirm_pick]["action"]
+	_close_attack_confirm()
+	_choose_option(act)
+
+
+## 기술 버튼 둘째 줄: 명중·피해 (디스펠은 성공률)
+func _action_detail(u: BattleUnit, t: BattleUnit, action: Dictionary) -> String:
+	match str(action.get("type", "")):
+		"dispel":
+			return "GET 성공 %d%%" % int(round(_dispel_chance(u, t) * 100.0))
+	if _is_tab_attack(action):
+		var txt := "명중%d%% 피해 %d" % [int(_hit_chance(u, t, action, false)), _expected_damage(u, u.cell, t, action)]
+		var el := _action_element(u, action)
+		var mult := GameData.element_multiplier(el, t.spirit.element())
+		if mult > 1.0:
+			txt += " ▲"
+		elif mult < 1.0:
+			txt += " ▼"
+		return txt
+	return _preview_for(u, action, t)
+
+
+## 가운데 비교 카드: [공격 측] 사거리 · 명중/피해 ↔ 반격 [방어 측], HP 막대 (지금 → 예상)
+func _compare_card(u: BattleUnit, t: BattleUnit, action: Dictionary, resp: String) -> Control:
+	var card := PanelContainer.new()
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.03, 0.04, 0.07)
+	st.border_color = UIKit.GOLD.darkened(0.5)
+	st.set_border_width_all(2)
+	st.set_corner_radius_all(8)
+	st.content_margin_left = 8
+	st.content_margin_right = 8
+	st.content_margin_top = 6
+	st.content_margin_bottom = 6
+	card.add_theme_stylebox_override("panel", st)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	card.add_child(row)
+	var dmg := 0
+	var hit := 0
+	var c_dmg := 0
+	var c_hit := 0
+	var kind := str(action.get("type", ""))
+	if _is_tab_attack(action):
+		dmg = _expected_damage(u, u.cell, t, action)
+		if resp == "defend" and kind != "sskill":
+			dmg = maxi(1, int(round(dmg * BattleLogic.DEFEND_MULT)))
+		hit = int(_hit_chance(u, t, action, resp == "defend"))
+		if resp == "counter" and dmg < t.spirit.hp and _can_counter(t, u):
+			c_dmg = _counter_damage(t, u, false)
+			c_hit = int(_hit_chance(t, u, {"type": "attack"}, false))
+	row.add_child(_compare_side(u, c_dmg))
+	var mid := VBoxContainer.new()
+	mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mid.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(mid)
+	mid.add_child(UIKit.label("사거리 %d" % grid.distance(u.cell, t.cell), 17, UIKit.MUTED, true))
+	if kind == "dispel":
+		mid.add_child(UIKit.label("GET!  %d%%" % int(round(_dispel_chance(u, t) * 100.0)), 30, UIKit.GOLD, true))
+	elif _is_tab_attack(action):
+		mid.add_child(UIKit.label("▶ %d%%  %d" % [hit, dmg], 30, Color(1.0, 0.5, 0.45), true))
+		if c_dmg > 0:
+			mid.add_child(UIKit.label("%d  %d%% ◀" % [c_dmg, c_hit], 24, Color(0.6, 0.85, 1.0), true))
+		elif resp == "defend":
+			mid.add_child(UIKit.label("방어", 22, Color(0.6, 0.85, 1.0), true))
+		var gu := _terrain_grade(u)
+		var gt := _terrain_grade(t)
+		mid.add_child(UIKit.label("지형 %s / %s" % [GameData.grade_mark(gu), GameData.grade_mark(gt)], 16, UIKit.MUTED, true))
+	else:
+		mid.add_child(UIKit.label(_preview_for(u, action, t), 26, UIKit.GOOD, true))
+	row.add_child(_compare_side(t, dmg))
+	return card
+
+
+## 비교 카드 한쪽: 도트 + 이름·Lv·속성 + HP 막대(예상 피해만큼 붉게) + MP
+func _compare_side(x: BattleUnit, incoming: int) -> Control:
+	var vb := VBoxContainer.new()
+	vb.custom_minimum_size = Vector2(200, 0)
+	vb.add_theme_constant_override("separation", 2)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 6)
+	vb.add_child(top)
+	var icon := TextureRect.new()
+	icon.texture = GameData.sprite_for(x.spirit)
+	icon.custom_minimum_size = Vector2(56, 56)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	top.add_child(icon)
+	var nm := UIKit.label("%s\nLv%d %s" % [x.spirit.display_name(), x.spirit.level, GameData.element_name(x.spirit.element())], 17,
+		GameData.element_color(x.spirit.element()).lightened(0.4))
+	top.add_child(nm)
+	vb.add_child(_vital_bar("HP", x.spirit.hp, x.spirit.max_hp(), incoming, Color(0.4, 0.9, 0.45)))
+	vb.add_child(_vital_bar("MP", x.spirit.mp, x.spirit.max_mp(), 0, Color(0.45, 0.65, 1.0)))
+	var master := "마스터: " + (GameState.summoner.display_name() if x.team == 0 else (enemy_summoner_unit.spirit.display_name() if x.owned and enemy_summoner_unit != null else "없음"))
+	if x.is_summoner:
+		master = "정령사"
+	vb.add_child(UIKit.label(master, 14, UIKit.MUTED))
+	return vb
+
+
+## 능력치 막대: [이름 ███▒▒  현재/최대] — loss만큼 끝을 붉게
+func _vital_bar(label: String, cur: int, mx: int, loss: int, col: Color) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	row.add_child(UIKit.label(label, 14, UIKit.MUTED))
+	var bar := Control.new()
+	bar.custom_minimum_size = Vector2(100, 12)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var w := 100.0
+	var bg := ColorRect.new()
+	bg.color = Color(0.15, 0.15, 0.2)
+	bg.size = Vector2(w, 12)
+	bar.add_child(bg)
+	var after := maxi(0, cur - loss)
+	var keep := ColorRect.new()
+	keep.color = col
+	keep.size = Vector2(w * float(after) / float(maxi(1, mx)), 12)
+	bar.add_child(keep)
+	if loss > 0 and cur > after:
+		var lost := ColorRect.new()
+		lost.color = Color(1.0, 0.3, 0.3, 0.6 + 0.3 * sin(time * 6.0))
+		lost.position = Vector2(keep.size.x, 0)
+		lost.size = Vector2(w * float(cur - after) / float(maxi(1, mx)), 12)
+		bar.add_child(lost)
+	row.add_child(bar)
+	row.add_child(UIKit.label("%d/%d" % [cur, mx], 14))
+	return row
+
+
+## 원작풍 창 (제목 줄 + 내용 VBox = get_child(0))
+func _window_panel(title: String) -> PanelContainer:
+	var panel := PanelContainer.new()
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.1, 0.11, 0.16, 0.98)
+	st.border_color = UIKit.GOLD.darkened(0.2)
+	st.set_border_width_all(3)
+	st.set_corner_radius_all(12)
+	st.content_margin_left = 10
+	st.content_margin_right = 10
+	st.content_margin_top = 8
+	st.content_margin_bottom = 10
+	st.shadow_color = Color(0, 0, 0, 0.6)
+	st.shadow_size = 10
+	panel.add_theme_stylebox_override("panel", st)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	panel.add_child(vb)
+	vb.add_child(UIKit.label(title, 22, UIKit.GOLD))
+	return panel
+
+
+func _window_button(text: String, cb: Callable, disabled: bool, selected: bool) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.disabled = disabled
+	b.focus_mode = Control.FOCUS_NONE
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.custom_minimum_size = Vector2(0, 58)
+	b.add_theme_font_size_override("font_size", 18)
+	b.add_theme_color_override("font_color", UIKit.GOLD if selected else Color.WHITE)
+	b.add_theme_color_override("font_disabled_color", Color(0.85, 0.85, 0.9) if selected else Color(0.55, 0.55, 0.6))
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.25, 0.2, 0.08) if selected else Color(0.13, 0.14, 0.2)
+	st.border_color = UIKit.GOLD if selected else Color(0.3, 0.32, 0.4)
+	st.set_border_width_all(2)
+	st.set_corner_radius_all(8)
+	st.content_margin_left = 10
+	b.add_theme_stylebox_override("normal", st)
+	b.add_theme_stylebox_override("hover", st)
+	b.add_theme_stylebox_override("pressed", st)
+	b.add_theme_stylebox_override("disabled", st)
+	if cb.is_valid():
+		b.pressed.connect(cb)
+	return b
+
+
 func _cancel_choose() -> void:
+	_close_attack_confirm()
 	choose_target = null
 	inspected = null
 	targets = {}
@@ -1299,6 +1620,8 @@ func _targets_for(u: BattleUnit, from_cell: Vector2i, action: Dictionary) -> Dic
 	var kind := str(action["type"])
 	if kind == "sskill":
 		return _summoner_skill_targets(u, from_cell, GameData.summoner_skills[action["skill_id"]])
+	if kind == "item":
+		return _item_targets(u, from_cell, str(action["item_id"]))
 	if kind == "recall":
 		for o in units:
 			var ally: BattleUnit = o
@@ -1372,6 +1695,8 @@ func _pending_targets_allies() -> bool:
 	match str(pending.get("type", "")):
 		"recall":
 			return true
+		"item":
+			return str(GameData.items[pending["item_id"]]["effect"]["type"]) != "damage"
 		"sskill":
 			return str(GameData.summoner_skills[pending["skill_id"]].get("target", "enemy")) != "enemy"
 	return false
@@ -1390,6 +1715,8 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 			_try_dispel(u, target)
 		"recall":
 			_recall(target)
+		"item":
+			await _use_item(u, action, target)
 		"sskill":
 			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
 			if str(ssk["type"]) == "attack":
@@ -1399,6 +1726,157 @@ func _perform(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
 				_cast_summoner_skill(u, target, ssk)
 				_award_xp(u, BattleLogic.SUPPORT_XP, false)
 	await get_tree().create_timer(ACTION_DELAY).timeout
+
+
+# ---------------------------------------------------------------- 도구 (소지창의 소모품)
+
+## 도구를 쓸 수 있는 대상. 회복·마력·정화 = 아군(자신 포함), 피해 = 적, 매듭 향 = 자신(정령사)
+func _item_targets(u: BattleUnit, from_cell: Vector2i, iid: String) -> Dictionary:
+	var result := {}
+	var e: Dictionary = GameData.items[iid]
+	var eff: Dictionary = e["effect"]
+	var r: Array = e.get("range", [0, 1])
+	var etype := str(eff["type"])
+	if etype == "bind":
+		if u.is_summoner:
+			result[u.cell] = u
+		return result
+	for o in units:
+		var other: BattleUnit = o
+		if not other.is_active():
+			continue
+		if (etype == "damage") == (other.team == u.team):
+			continue
+		var d := grid.distance(from_cell, other.cell)
+		if d >= int(r[0]) and d <= int(r[1]):
+			result[other.cell] = other
+	return result
+
+
+## 도구 효과가 미치는 유닛 (범위 area: 고른 칸 둘레의 같은 편)
+func _item_area_units(u: BattleUnit, target: BattleUnit, iid: String) -> Array:
+	var e: Dictionary = GameData.items[iid]
+	var area := int(e.get("area", 0))
+	if area <= 0:
+		return [target]
+	var result := []
+	for o in units:
+		var other: BattleUnit = o
+		if other.is_active() and other.team == target.team and grid.distance(target.cell, other.cell) <= area:
+			result.append(other)
+	return result
+
+
+func _use_item(u: BattleUnit, action: Dictionary, target: BattleUnit) -> void:
+	var iid := str(action["item_id"])
+	var slot := int(action.get("slot", -1))
+	if slot < 0 or slot >= u.spirit.items.size() or str(u.spirit.items[slot]) != iid:
+		slot = u.spirit.items.find(iid)
+	if slot >= 0:
+		u.spirit.items[slot] = ""   # 쓰면 사라진다
+	var e: Dictionary = GameData.items[iid]
+	var eff: Dictionary = e["effect"]
+	await _anim_hop(u, COLOR_TOOL)
+	_log("%s이(가) %s을(를) 사용했다!" % [u.spirit.display_name(), e["name"]])
+	match str(eff["type"]):
+		"heal":
+			for o in _item_area_units(u, target, iid):
+				var t: BattleUnit = o
+				var before := t.spirit.hp
+				t.spirit.hp = mini(t.spirit.max_hp(), t.spirit.hp + int(eff["amount"]))
+				_effect("+%d" % (t.spirit.hp - before), t.draw_pos, Color(0.5, 1.0, 0.6))
+				_add_fx("charge", t.draw_pos, Color(0.5, 1.0, 0.6), 0.35)
+				_wake_if_healed(t)
+		"mp":
+			for o in _item_area_units(u, target, iid):
+				var t: BattleUnit = o
+				var before := t.spirit.mp
+				t.spirit.mp = mini(t.spirit.max_mp(), t.spirit.mp + int(eff["amount"]))
+				_effect("MP+%d" % (t.spirit.mp - before), t.draw_pos, Color(0.55, 0.75, 1.0))
+		"cure":
+			for o in _item_area_units(u, target, iid):
+				var t: BattleUnit = o
+				if t.status != "":
+					_log("%s의 %s 상태가 풀렸다." % [t.spirit.display_name(), BattleUnit.STATUS_NAMES[t.status]])
+					t.status = ""
+					t.status_turns = 0
+					_effect("정화", t.draw_pos, Color(0.9, 1.0, 0.8))
+		"damage":
+			var el := str(eff.get("element", ""))
+			var dmg := maxi(1, int(round(float(eff["amount"]) * GameData.element_multiplier(el, target.spirit.element()))))
+			_add_fx("burst", target.draw_pos, GameData.element_color(el), 0.4, {"el": el})
+			_hit(u, target, dmg, str(e["name"]), el)
+		"bind":
+			u.bind_bonus += float(eff["amount"]) / 100.0
+			_effect("디스펠+%d%%" % int(eff["amount"]), u.draw_pos, UIKit.GOLD)
+	if u.team == 0 and str(eff["type"]) != "damage":
+		_award_xp(u, BattleLogic.SUPPORT_XP, false)
+
+
+func _item_preview(u: BattleUnit, iid: String, t: BattleUnit) -> String:
+	var eff: Dictionary = GameData.items[iid]["effect"]
+	match str(eff["type"]):
+		"heal":
+			return "+%d" % int(eff["amount"])
+		"mp":
+			return "MP+%d" % int(eff["amount"])
+		"cure":
+			return "정화" if t.status != "" else "-"
+		"damage":
+			return "-%d" % maxi(1, int(round(float(eff["amount"]) * GameData.element_multiplier(str(eff.get("element", "")), t.spirit.element()))))
+		"bind":
+			return "+%d%%" % int(eff["amount"])
+	return ""
+
+
+func _build_tool_list() -> void:
+	var lines := PackedStringArray()
+	for i in active.spirit.tool_slots():
+		var iid := str(active.spirit.items[i])
+		var action := {"type": "item", "item_id": iid, "slot": int(i)}
+		var reason := "" if not _item_targets(active, active.cell, iid).is_empty() else "대상 없음"
+		_add_action(_labeled(GameData.item_name(iid), 0, reason), _choose_tab_action.bind(action), reason != "", "tool")
+		lines.append("· " + GameData.item_info(iid).replace("\n", " — "))
+	_add_action("뒤로", _close_submenu, false, "back")
+	hint_label.text = "도구를 고르고 보라색 칸의 대상을 누르세요. 쓰면 사라지고 행동이 끝납니다."
+	detail_label.text = "\n".join(lines)
+
+
+## 적의 도구 사용: 다친 아군 회복, 잠·석화 풀기, 마무리 공격. 썼으면 true
+func _enemy_try_item(u: BattleUnit) -> bool:
+	for i in u.spirit.tool_slots():
+		var iid := str(u.spirit.items[i])
+		var eff: Dictionary = GameData.items[iid]["effect"]
+		var cands := _item_targets(u, u.cell, iid)
+		var pick: BattleUnit = null
+		match str(eff["type"]):
+			"heal":
+				var worst := 0.45
+				for c in cands:
+					var t: BattleUnit = cands[c]
+					var ratio := float(t.spirit.hp) / float(maxi(1, t.spirit.max_hp()))
+					if ratio < worst and t.spirit.max_hp() - t.spirit.hp >= 10:
+						worst = ratio
+						pick = t
+			"cure":
+				for c in cands:
+					var t: BattleUnit = cands[c]
+					if t.status in ["sleep", "petrify", "poison"]:
+						pick = t
+			"damage":
+				for c in cands:
+					var t: BattleUnit = cands[c]
+					if t.spirit.hp <= int(_item_preview(u, iid, t).trim_prefix("-")) or rng.randf() < 0.15:
+						pick = t
+						break
+			"mp":
+				if u.spirit.mp * 3 < u.spirit.max_mp() and cands.has(u.cell):
+					pick = u
+		if pick != null:
+			await _use_item(u, {"type": "item", "item_id": iid, "slot": int(i)}, pick)
+			await get_tree().create_timer(ACTION_DELAY).timeout
+			return true
+	return false
 
 
 # ---------------------------------------------------------------- 공격 탭 공격: 대응(반격/방어) → 명중 → 피해 → 반격
@@ -1422,26 +1900,69 @@ func _tab_attack(u: BattleUnit, target: BattleUnit, action: Dictionary) -> void:
 		power = int(ssk["power"])
 		name_text = str(ssk["name"])
 	var response: String = await _choose_response(u, target, action)
+	var chance := _hit_chance(u, target, action, response == "defend")
+	var duel: DuelView = null
+	if _duel_enabled():
+		duel = DuelView.open(ui_root, u.spirit, target.spirit, tile_tex.get(grid.terrain_at(target.cell), bg_tex),
+			GameData.element_color(u.spirit.element()).lightened(0.4), GameData.element_color(target.spirit.element()).lightened(0.4))
+		var est := _expected_damage(u, u.cell, target, action)
+		if response == "defend" and kind != "sskill":
+			est = maxi(1, int(round(est * BattleLogic.DEFEND_MULT)))
+		var right := "방어 (피해 절반)" if response == "defend" else "반격"
+		if response == "counter" and _can_counter(target, u):
+			right += "  명중%d%% %d" % [int(_hit_chance(target, u, {"type": "attack"}, false)), _counter_damage(target, u, false)]
+		elif response == "counter":
+			right = "반격 불가 (거리)"
+		duel.set_header("%s · %s\n명중%d%%  피해 약 %d" % [u.spirit.display_name(), name_text, int(chance), est],
+			"%s\n%s" % [target.spirit.display_name(), right])
 	if response == "defend":
 		_effect("방어", target.draw_pos + Vector2(0, -34), Color(0.7, 0.85, 1.0))
-	if kind == "attack":
+		if duel != null:
+			await duel.show_text(1, "방어", Color(0.7, 0.85, 1.0))
+	if duel != null:
+		await duel.attack(0, kind == "attack", GameData.element_color(element))
+	elif kind == "attack":
 		await _anim_melee(u, target, element)
 	else:
 		await _anim_cast(u, target, element)
 	if not target.is_active():
+		if duel != null:
+			await duel.finish()
 		return
-	var chance := _hit_chance(u, target, action, response == "defend")
 	if rng.randf() * 100.0 >= chance:
 		_log("%s의 %s! 하지만 %s이(가) 피했다. (명중 %d%%)" % [u.spirit.display_name(), name_text, target.spirit.display_name(), int(chance)])
 		_effect("빗나감", target.draw_pos, Color(0.8, 0.8, 0.9))
+		if duel != null:
+			await duel.show_miss(1)
 	else:
 		var dmg := _damage(u, u.cell, target, power, element, true)
 		if response == "defend" and kind != "sskill":
 			dmg = maxi(1, int(round(dmg * BattleLogic.DEFEND_MULT)))
+		var before := target.spirit.hp
 		_hit(u, target, dmg, name_text, element)
+		if duel != null:
+			await duel.show_hit(1, maxi(dmg, before - target.spirit.hp), target.spirit.hp if target.alive else 0)
 		_apply_skill_status(u, target, action)
+		if duel != null and target.status != "" and target.alive:
+			await duel.show_text(1, str(BattleUnit.STATUS_NAMES[target.status]), BattleUnit.STATUS_COLORS[target.status])
 	if response == "counter":
-		await _try_counter(u, target)
+		await _try_counter(u, target, duel)
+	if duel != null:
+		await duel.finish()
+
+
+## 대응 예상 (확인창 표시용, 매번 묻기는 반격으로 가정)
+func _predict_response(attacker: BattleUnit, target: BattleUnit, action: Dictionary) -> String:
+	if not _status_can_counter(target):
+		return "defend"
+	var can_counter := _can_counter(target, attacker)
+	if target.team == 1:
+		if not can_counter:
+			return "defend"
+		return "defend" if _expected_damage(attacker, attacker.cell, target, action) >= target.spirit.hp else "counter"
+	if response_mode() == "defend" or not can_counter:
+		return "defend"
+	return "counter"
 
 
 ## 맞는 쪽의 대응. 적은 AI가, 아군은 설정(자동 반격 / 자동 방어 / 매번 묻기)대로.
@@ -1492,37 +2013,63 @@ func _hit_chance(u: BattleUnit, target: BattleUnit, action: Dictionary, defendin
 	return clampf(base, 5.0, 99.0)
 
 
-## '매번 묻기': 적이 공격해 올 때 반격/방어를 직접 고른다
+## '매번 묻기': 적이 공격해 올 때 '공격 선택'과 같은 창에서 반격/방어를 직접 고른다
 func _ask_response(attacker: BattleUnit, target: BattleUnit, action: Dictionary, can_counter: bool) -> String:
-	var exp_dmg := _expected_damage(attacker, attacker.cell, target, action)
-	var magic := str(action.get("type", "")) == "sskill"
-	var def_dmg := exp_dmg if magic else maxi(1, int(round(exp_dmg * BattleLogic.DEFEND_MULT)))
-	var box := PanelContainer.new()
-	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	box.grow_vertical = Control.GROW_DIRECTION_BOTH
-	box.custom_minimum_size = Vector2(600, 0)
-	box.add_theme_stylebox_override("panel", _pill_style(Color(0.08, 0.09, 0.14, 0.97), UIKit.GOLD.darkened(0.2), 16))
-	ui_root.add_child(box)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 12)
-	box.add_child(vb)
-	vb.add_child(UIKit.label("%s이(가) %s을(를) 노린다!" % [attacker.spirit.display_name(), target.spirit.display_name()], 26, UIKit.GOLD, true))
-	var choice := {"v": ""}
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	vb.add_child(row)
-	var cb := UIKit.button("반격\n받는 피해 약 %d · 되받아침" % exp_dmg if can_counter else "반격 불가\n(거리가 멂)", func(): choice["v"] = "counter", not can_counter, 96)
-	var db := UIKit.button("방어\n받는 피해 약 %d%s" % [def_dmg, " (마법은 그대로)" if magic else ""], func(): choice["v"] = "defend", false, 96)
-	row.add_child(cb)
-	row.add_child(db)
+	var choice := {"v": "", "pick": "counter" if can_counter else "defend"}
+	var overlay := ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.45)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui_root.add_child(overlay)
+	var holder := VBoxContainer.new()
+	holder.position = Vector2(16, 250)
+	holder.custom_minimum_size = Vector2(688, 0)
+	overlay.add_child(holder)
+	_fill_defence_window(holder, attacker, target, action, can_counter, choice)
 	var old_scale := Engine.time_scale
 	Engine.time_scale = 1.0
 	while str(choice["v"]) == "":
 		await get_tree().process_frame
+		if bool(choice.get("dirty", false)):
+			choice["dirty"] = false
+			UIKit.clear(holder)
+			_fill_defence_window(holder, attacker, target, action, can_counter, choice)
 	Engine.time_scale = old_scale
-	box.queue_free()
+	overlay.queue_free()
 	return str(choice["v"])
+
+
+func _fill_defence_window(holder: VBoxContainer, attacker: BattleUnit, target: BattleUnit, action: Dictionary, can_counter: bool, choice: Dictionary) -> void:
+	var panel := _window_panel("방어 선택 — %s이(가) %s을(를) 노린다!" % [attacker.spirit.display_name(), target.spirit.display_name()])
+	holder.add_child(panel)
+	var vb: VBoxContainer = panel.get_child(0)
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 10)
+	vb.add_child(cols)
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cols.add_child(left)
+	left.add_child(UIKit.label("공격 (적)", 18, Color(1.0, 0.6, 0.55)))
+	var ab := _window_button("%s\n%s" % [_action_name(attacker, action), _action_detail(attacker, target, action)], Callable(), true, true)
+	left.add_child(ab)
+	var right := VBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cols.add_child(right)
+	right.add_child(UIKit.label("대응 (아군)", 18, Color(0.6, 0.85, 1.0)))
+	var set_pick := func(v: String):
+		choice["pick"] = v
+		choice["dirty"] = true
+	var cb := _window_button("반격 — 기본 공격\n%s" % ("명중%d%% 피해 %d" % [int(_hit_chance(target, attacker, {"type": "attack"}, false)), _counter_damage(target, attacker, false)] if can_counter else "거리가 멀어 불가"),
+		set_pick.bind("counter"), not can_counter, str(choice["pick"]) == "counter")
+	right.add_child(cb)
+	var db := _window_button("방어\n받는 피해 절반 · 회피↑", set_pick.bind("defend"), false, str(choice["pick"]) == "defend")
+	right.add_child(db)
+	vb.add_child(_compare_card(attacker, target, action, str(choice["pick"])))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	vb.add_child(row)
+	var ok := UIKit.button("확인", func(): choice["v"] = choice["pick"], false, 60)
+	row.add_child(ok)
 
 
 # ---------------------------------------------------------------- 상태이상 (원작 5종)
@@ -1620,18 +2167,39 @@ func _run_confused_turn(u: BattleUnit) -> void:
 
 ## '반격'으로 대응한 쪽이 살아남고 공격자가 기본 공격 사거리(1) 안이면 기본 공격으로 되받아친다.
 ## 반격에도 명중 판정이 있고, 반격에는 다시 반격하지 않는다. 원거리 스킬로 떨어져서 치면 반격을 피할 수 있다.
-func _try_counter(attacker: BattleUnit, defender: BattleUnit) -> void:
+func _try_counter(attacker: BattleUnit, defender: BattleUnit, duel: DuelView = null) -> void:
 	if not _can_counter(defender, attacker):
 		return
 	await get_tree().create_timer(0.12).timeout
 	_log("%s의 반격!" % defender.spirit.display_name())
 	_tutorial("counter")
-	await _anim_melee(defender, attacker, defender.spirit.element())
+	if duel != null:
+		await duel.banner("반격!", Color(1.0, 0.35, 0.3))
+		await duel.attack(1, true, GameData.element_color(defender.spirit.element()))
+	else:
+		await _anim_melee(defender, attacker, defender.spirit.element())
 	if rng.randf() * 100.0 >= _hit_chance(defender, attacker, {"type": "attack"}, false):
 		_log("%s의 반격이 빗나갔다." % defender.spirit.display_name())
 		_effect("빗나감", attacker.draw_pos, Color(0.8, 0.8, 0.9))
+		if duel != null:
+			await duel.show_miss(0)
 		return
-	_hit(defender, attacker, _counter_damage(defender, attacker, true), "반격", defender.spirit.element())
+	var dmg := _counter_damage(defender, attacker, true)
+	var before := attacker.spirit.hp
+	_hit(defender, attacker, dmg, "반격", defender.spirit.element())
+	if duel != null:
+		await duel.show_hit(0, maxi(dmg, before - attacker.spirit.hp), attacker.spirit.hp if attacker.alive else 0)
+
+
+## 전투 연출 창을 띄우는가: 설정(flags.battle_anim, 기본 켬). 튜토리얼 스크립트 중에는 말풍선과 겹치지 않게 끔
+func _duel_enabled() -> bool:
+	return bool(GameState.flags.get("battle_anim", true)) and not _script_active()
+
+
+func _toggle_battle_anim(overlay: Control) -> void:
+	GameState.flags["battle_anim"] = not bool(GameState.flags.get("battle_anim", true))
+	overlay.queue_free()
+	_show_help()
 
 
 func _can_counter(defender: BattleUnit, attacker: BattleUnit) -> bool:
@@ -1838,9 +2406,22 @@ func _knock_out(target: BattleUnit) -> void:
 		target.spirit.hp = 1
 		_check_guardian_reveal(target)
 		return
+	if not target.revive_used and target.spirit.has_special("revive"):
+		# 부활 장비: 쓰러지면 HP 가득 찬 채 되살아난다 (몇 개를 들어도 전투마다 1회)
+		target.revive_used = true
+		target.spirit.hp = target.spirit.max_hp()
+		target.status = ""
+		_add_fx("charge", target.draw_pos, Color(1.0, 0.95, 0.6), 0.6)
+		_effect("부활!", target.draw_pos + Vector2(0, -20), Color(1.0, 0.95, 0.6))
+		_log("%s이(가) 부활의 깃털로 되살아났다!" % target.spirit.display_name())
+		return
 	target.alive = false
 	if target.team == 0 and not target.is_summoner:
 		target.spirit.add_affinity(-10)
+	if target.team == 1 and not target.is_summoner and rng.randf() < 0.45:
+		var mat := GameData.element_material(target.spirit.element())
+		battle_loot.append(mat)
+		_effect(GameData.item_name(mat), target.draw_pos + Vector2(0, 20), Color(0.85, 0.75, 1.0))
 	_vanish(target, "vanish", Color(1.0, 1.0, 1.0))
 	if target.team == 1 and not target.is_summoner:
 		GameState.quest_event("defeat", target.spirit.element())  # 마을 퇴치 의뢰
@@ -1869,7 +2450,8 @@ func _dispel_chance(u: BattleUnit, t: BattleUnit) -> float:
 	var chance := BattleLogic.dispel_chance(u.spirit, t.spirit, t.owned)
 	if t.is_guardian:
 		chance = minf(0.95, chance + GUARDIAN_DISPEL_BONUS)
-	return chance
+	chance += u.bind_bonus + (0.1 if u.spirit.has_special("bind") else 0.0)
+	return minf(0.98, chance)
 
 
 ## 수호 정령: HP가 일정 이하로 내려가면 실이 드러난다
@@ -1887,6 +2469,7 @@ func _try_dispel(u: BattleUnit, target: BattleUnit) -> void:
 	var chance := _dispel_chance(u, target)
 	var pct := int(round(chance * 100.0))
 	_log("%s이(가) 디스펠을 시도했다... (성공률 %d%%)" % [u.spirit.display_name(), pct])
+	u.bind_bonus = 0.0
 	if rng.randf() < chance:
 		target.captured = true
 		if not GameState.party.has(target.spirit):
@@ -1925,6 +2508,8 @@ func _animate_move(u: BattleUnit, c: Vector2i) -> void:
 
 func _run_enemy_turn(u: BattleUnit) -> void:
 	await get_tree().create_timer(ENEMY_DELAY).timeout
+	if await _enemy_try_item(u):
+		return
 	var plan := _plan_enemy(u)
 	var dest: Vector2i = plan["cell"]
 	if dest != u.cell:
@@ -1938,6 +2523,8 @@ func _run_enemy_turn(u: BattleUnit) -> void:
 func _run_enemy_summoner_turn(u: BattleUnit) -> void:
 	await get_tree().create_timer(ENEMY_DELAY).timeout
 	var m: Summoner = u.spirit
+	if await _enemy_try_item(u):
+		return
 	var want_summon := not _enemy_summon_choices(m).is_empty()
 
 	var cells := _reachable_for(u)
@@ -2205,6 +2792,16 @@ func _draw() -> void:
 				if g != 0:
 					var mcol := Color(0.55, 1.0, 0.6) if g > 0 else Color(1.0, 0.55, 0.5)
 					_draw_text(GameData.grade_mark(g), center + Vector2(HEX_SIZE * 0.42, -HEX_SIZE * 0.28), 18, mcol)
+			if phase == "player" and active != null and not has_moved and reachable.has(c):
+				var ring := grid.corners(center, HEX_SIZE - 4.0)
+				ring.append(ring[0])
+				draw_polyline(ring, COLOR_MOVE_LINE if c != preview_cell else UIKit.GOLD, 3.0 if c != preview_cell else 4.0)
+			if treasure.has(c):
+				var tp := center + Vector2(0, HEX_SIZE * 0.35)
+				var tb := 0.6 + 0.4 * sin(time * 4.0 + float(c.x))
+				draw_rect(Rect2(tp - Vector2(11, 8), Vector2(22, 15)), Color(0.55, 0.33, 0.12))
+				draw_rect(Rect2(tp - Vector2(11, 8), Vector2(22, 15)), Color(1.0, 0.85, 0.4, tb), false, 2.0)
+				draw_line(tp + Vector2(-11, -2), tp + Vector2(11, -2), Color(1.0, 0.85, 0.4, tb), 2.0)
 			if phase == "placing" and place_cells.has(c) and tid == "circle":
 				# 멀리 떨어진 우리 편 마법진도 소환 자리 — 따로 반짝이게
 				draw_arc(center, HEX_SIZE * 0.8, 0.0, TAU, 36, Color(CIRCLE_ALLY, 0.6 + 0.4 * sin(time * 6.0)), 4.0)
@@ -2244,6 +2841,8 @@ func _cell_overlay(c: Vector2i) -> Color:
 	var pulse := 0.5 + 0.5 * sin(time * 6.0)
 	var adv := _advantage_color(c)
 	if phase == "targeting" and targets.has(c):
+		if str(pending.get("type", "")) == "item":
+			return Color(COLOR_TOOL, 0.5 + 0.2 * pulse)
 		if _pending_targets_allies():
 			return Color(COLOR_ALLY_TARGET, 0.5 + 0.2 * pulse)
 		return Color(adv if adv.a > 0.0 else COLOR_TARGET, 0.5 + 0.25 * pulse)
@@ -2255,7 +2854,8 @@ func _cell_overlay(c: Vector2i) -> Color:
 	if phase == "placing" and place_cells.has(c):
 		return Color(COLOR_PLACE, 0.45 + 0.2 * pulse)
 	if phase == "player" and not has_moved and reachable.has(c):
-		return Color(COLOR_MOVE, 0.7 if c == preview_cell else 0.42)
+		# 원작처럼 지형이 비치는 옅은 빛 + 흰 테두리 (테두리는 _draw에서)
+		return Color(1.0, 1.0, 0.85, 0.42) if c == preview_cell else Color(1.0, 1.0, 1.0, 0.1)
 	if active != null and active.cell == c:
 		return Color(COLOR_ACTIVE_CELL, 0.35)
 	if phase in ["select", "player"]:
@@ -2738,6 +3338,8 @@ func _preview_for(u: BattleUnit, action: Dictionary, t: BattleUnit) -> String:
 			return "-%d" % _damage(u, u.cell, t, _attack_power(u), u.spirit.element(), false)
 		"recall":
 			return "귀환"
+		"item":
+			return _item_preview(u, str(action["item_id"]), t)
 		"sskill":
 			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
 			match str(ssk["type"]):
@@ -2844,6 +3446,9 @@ func _build_ui() -> void:
 	card.add_child(unit_icon)
 	info_label = UIKit.label("", 22)
 	card.add_child(info_label)
+	status_holder = VBoxContainer.new()
+	status_holder.add_theme_constant_override("separation", 4)
+	vb.add_child(status_holder)
 
 	hint_label = UIKit.label("", 22, UIKit.GOLD)
 	vb.add_child(hint_label)
@@ -2984,6 +3589,8 @@ func _show_help() -> void:
 		var key := str(pair[0])
 		var b := UIKit.button(("● " if response_mode() == key else "") + str(pair[1]), _set_response_mode.bind(key, overlay), response_mode() == key, 64)
 		rrow.add_child(b)
+	var anim_on := bool(GameState.flags.get("battle_anim", true))
+	vb.add_child(UIKit.button("전투 연출 창: %s (눌러서 %s)" % ["켬" if anim_on else "끔", "끄기" if anim_on else "켜기"], _toggle_battle_anim.bind(overlay), false, 64))
 	vb.add_child(UIKit.spacer())
 	vb.add_child(UIKit.button("닫기", overlay.queue_free))
 
@@ -3357,12 +3964,17 @@ func _rebuild_ui() -> void:
 	var shown: BattleUnit = inspected if inspected != null else (null if grid.in_bounds(inspected_cell) else active)
 	if shown == null and phase == "enemy":
 		shown = active
+	UIKit.clear(status_holder)
 	if inspected == null and grid.in_bounds(inspected_cell):
 		info_label.text = _terrain_info(inspected_cell)
 		unit_icon.texture = tile_tex.get(grid.terrain_at(inspected_cell), null)
+		status_holder.add_child(_terrain_grade_row(grid.terrain_at(inspected_cell)))
 	else:
 		info_label.text = _unit_info(shown)
 		unit_icon.texture = GameData.sprite_for(shown.spirit) if shown != null else null
+		if shown != null:
+			unit_card.visible = false
+			status_holder.add_child(_status_card(shown))
 	unit_icon.visible = unit_icon.texture != null
 
 	var anchor: BattleUnit = active
@@ -3379,12 +3991,16 @@ func _rebuild_ui() -> void:
 				hint_label.text = "파란 칸을 눌러 이동 (한 번 더 누르면 출발). 이동하지 않고 행동하려면 %s을(를) 한 번 더 누르세요. 빈 곳을 누르면 취소." % active.spirit.display_name()
 		"choose":
 			anchor = choose_target
-			for o in _target_options(active, choose_target):
+			if attack_confirm != null:
+				hint_label.text = "쓸 공격을 고르고 명중·피해를 확인한 뒤 '확인'."
+				anchor = null
+			for o in ([] if attack_confirm != null else _target_options(active, choose_target)):
 				var opt: Dictionary = o
 				var act: Dictionary = opt["action"]
 				_add_action(str(opt["label"]), func(): _choose_option(act), not bool(opt["ok"]), "opt_" + str(act.get("type", "")))
-			_add_action("취소", _cancel_choose, false, "cancel")
-			hint_label.text = "%s에게 할 행동을 고르세요. (흐린 버튼 = MP 부족 / 사거리 밖)" % choose_target.spirit.display_name()
+			if attack_confirm == null:
+				_add_action("취소", _cancel_choose, false, "cancel")
+				hint_label.text = "%s에게 할 행동을 고르세요. (흐린 버튼 = MP 부족 / 사거리 밖)" % choose_target.spirit.display_name()
 		"targeting":
 			_add_action("취소", _cancel_targeting, false, "cancel")
 			match str(pending.get("type", "")):
@@ -3392,6 +4008,8 @@ func _rebuild_ui() -> void:
 					hint_label.text = "계약할 정령을 누르세요. (숫자 = 성공 확률, 적 정령사의 정령은 더 어려움)"
 				"recall":
 					hint_label.text = "귀환시킬 정령을 누르세요."
+				"item":
+					hint_label.text = "%s: 보라색 칸의 대상을 누르세요. — %s" % [GameData.item_name(str(pending["item_id"])), GameData.items[pending["item_id"]].get("desc", "")]
 				"sskill":
 					var ssk: Dictionary = GameData.summoner_skills[pending["skill_id"]]
 					hint_label.text = "%s: 대상을 누르세요. — %s" % [ssk["name"], ssk.get("desc", "")]
@@ -3484,7 +4102,7 @@ func _move_hint() -> String:
 func _add_common_actions() -> void:
 	_add_action("대기", _on_wait, false, "wait")
 	if has_moved:
-		_add_action("이동 취소", _undo_move, false, "undo")
+		_add_action("이동 취소", _undo_move, picked_this_move, "undo")
 	else:
 		_add_action("닫기", _close_menu, false, "close")
 
@@ -3568,6 +4186,7 @@ func _build_attack_tab() -> void:
 ## 큰 소환 창: 아래 패널을 위로 키워 목록(속성 탭·정렬) + 고른 정령 상세·장비 + 소환 버튼을 보여 준다.
 func _build_summon_list() -> void:
 	unit_card.visible = false
+	UIKit.clear(status_holder)
 	detail_label.visible = false
 	log_label.visible = false
 	summon_box.visible = true
@@ -3707,8 +4326,13 @@ func _build_summoner_actions() -> void:
 		hint_label.text = "정령사 스킬을 고르세요. (흐린 버튼 = MP 부족 / 대상 없음)"
 		detail_label.text = "\n".join(lines)
 		return
+	if submenu == "tools":
+		_build_tool_list()
+		return
 	_add_action("공격 ▸", _open_submenu.bind("attacks"), false, "attacks")
 	_add_action("스킬 ▸", _open_submenu.bind("sskills"), m.support_skill_ids().is_empty(), "sskills")
+	if not m.tool_slots().is_empty():
+		_add_action("도구 ▸", _open_submenu.bind("tools"), false, "tools")
 	_add_action("소환 ▸", _open_submenu.bind("summon"), not _can_summon_more(), "summon")
 	_add_common_actions()
 	hint_label.text = _move_hint()
@@ -3718,7 +4342,12 @@ func _build_spirit_actions() -> void:
 	if submenu == "attacks":
 		_build_attack_tab()
 		return
+	if submenu == "tools":
+		_build_tool_list()
+		return
 	_add_action("공격 ▸", _open_submenu.bind("attacks"), false, "attacks")
+	if not active.spirit.tool_slots().is_empty():
+		_add_action("도구 ▸", _open_submenu.bind("tools"), false, "tools")
 	if _can_recall(active):
 		_add_action("귀환", _on_recall, false, "recall")
 	_add_common_actions()
@@ -3772,12 +4401,144 @@ func _unit_info(u: BattleUnit) -> String:
 		extra += "  [%s %d]" % [BattleUnit.STATUS_NAMES[u.status], u.status_turns]
 	for b in u.buffs:
 		extra += "  [%s %d]" % [b["name"], int(b["rounds"])]
+	var held := PackedStringArray()
+	for o in s.items:
+		if str(o) != "":
+			held.append(GameData.item_name(str(o)))
+	if not held.is_empty():
+		extra += "  소지:" + "/".join(held)
 	var g := _terrain_grade(u)
 	return "[%s] %s Lv.%d %s · HP %d/%d MP %d/%d\n공%d 방%d 속%d 이동%d%s · %s%s" % [
 		tag, s.display_name(), s.level, GameData.element_name(s.element()),
 		s.hp, s.max_hp(), s.mp, s.max_mp(),
 		s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"), extra,
 		GameData.terrain_name(grid.terrain_at(u.cell)), GameData.grade_mark(g)]
+
+
+## 원작풍 유닛 상태창: [도트 | 이름·Lv·속성·HP/MP 막대 | 능력치] / 공격 3칸 / 소지품 3칸 (정령사는 다음 턴 MP)
+func _status_card(u: BattleUnit) -> Control:
+	var s := u.spirit
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 10)
+	box.add_child(top)
+	var icon := TextureRect.new()
+	icon.texture = GameData.sprite_for(s)
+	icon.custom_minimum_size = Vector2(68, 68)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	top.add_child(icon)
+	var mid := VBoxContainer.new()
+	mid.add_theme_constant_override("separation", 1)
+	mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(mid)
+	var head := "[%s] %s  Lv.%d %s" % [_unit_tag(u), s.display_name(), s.level, GameData.element_name(s.element())]
+	if u.status != "":
+		head += "  [%s %d]" % [BattleUnit.STATUS_NAMES[u.status], u.status_turns]
+	mid.add_child(UIKit.label(head, 19, GameData.element_color(s.element()).lightened(0.45)))
+	mid.add_child(_vital_bar("HP", s.hp, s.max_hp(), 0, Color(0.4, 0.9, 0.45)))
+	mid.add_child(_vital_bar("MP", s.mp, s.max_mp(), 0, Color(0.45, 0.65, 1.0)))
+	if u.team == 0:
+		mid.add_child(UIKit.label("EXP %d/%d" % [s.xp, s.xp_to_next()], 14, UIKit.MUTED))
+	var stats := UIKit.label("공 %d  방 %d\n속 %d  이동 %d\n%s" % [s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"),
+		("유지 %d · ♥%d" % [s.upkeep(), s.affinity]) if not u.is_summoner else "코스트 0"], 16)
+	top.add_child(stats)
+	# 공격 3칸 (정령사는 기본 공격 · 공격 마법 · 디스펠 GET)
+	var arow := HBoxContainer.new()
+	arow.add_theme_constant_override("separation", 4)
+	box.add_child(arow)
+	for o in _attack_tab(u):
+		var action: Dictionary = o
+		arow.add_child(_slot_chip(_attack_chip_text(u, action), GameData.element_color(_action_element(u, action)) if _action_element(u, action) != "" else UIKit.GOLD))
+	# 소지품 3칸
+	var irow := HBoxContainer.new()
+	irow.add_theme_constant_override("separation", 4)
+	box.add_child(irow)
+	for o in s.items:
+		var iid := str(o)
+		var txt := "— 빈 칸 —"
+		var col := Color(0.35, 0.37, 0.45)
+		if iid != "":
+			var e: Dictionary = GameData.items[iid]
+			if GameData.item_kind(iid) == "tool":
+				txt = "%s\n도구" % e["name"]
+				col = COLOR_TOOL
+			else:
+				var b := GameData.bonus_text(e.get("bonus", {})).replace("체력", "HP").replace("마력", "MP").replace("공격", "공").replace("방어", "방").replace("속도", "속").replace("이동", "이")
+				if e.has("special"):
+					b += (" " if b != "" else "") + GameData.special_name(str(e["special"]))
+				txt = "%s\n%s" % [e["name"], b]
+				col = UIKit.GOLD.darkened(0.2)
+		irow.add_child(_slot_chip(txt, col))
+	if u.is_summoner:
+		var m: Summoner = s
+		var counts := {}
+		for o in units:
+			var x: BattleUnit = o
+			if x.is_active() and x.team == u.team and not x.is_summoner:
+				counts[x.spirit.element()] = int(counts.get(x.spirit.element(), 0)) + 1
+		var parts := PackedStringArray()
+		for el in ["grass", "water", "wind", "fire"]:
+			parts.append("%s%d" % [GameData.element_name(el), int(counts.get(el, 0))])
+		var up := _upkeep_total(u.team)
+		var next := clampi(s.mp + m.mp_regen() - up, 0, s.max_mp())
+		box.add_child(UIKit.label("소환 정령 %s (%d/%d) · 다음 턴 MP %d/%d (+%d −%d)%s" % [" ".join(parts), _summoned_count(u.team), m.summon_limit(),
+			next, s.max_mp(), m.mp_regen(), up, "  ⚠MP부족" if s.mp + m.mp_regen() < up else ""], 16,
+			Color(1.0, 0.6, 0.5) if s.mp + m.mp_regen() < up else Color(0.75, 0.85, 1.0)))
+	var tid := grid.terrain_at(u.cell)
+	box.add_child(UIKit.label("지형: %s %s" % [GameData.terrain_name(tid), GameData.grade_mark(_terrain_grade(u))], 15, UIKit.MUTED))
+	return box
+
+
+func _attack_chip_text(u: BattleUnit, action: Dictionary) -> String:
+	match str(action.get("type", "")):
+		"attack":
+			return "기본 공격\n명중%d 위력%d 사1" % [int(90 + u.spirit.level * 0.5), _attack_power(u)]
+		"dispel":
+			return "디스펠 GET\nMP%d 사%d" % [GameState.summoner.dispel_cost(), GameState.summoner.dispel_range()]
+		"skill":
+			var sk: Dictionary = GameData.skills[action["skill_id"]]
+			return "%s\n명중%d 위력%d 사%d-%d MP%d" % [sk["name"], int(sk.get("hit", 80)), int(sk["power"]), int(sk["range_min"]), int(sk["range_max"]), int(sk["mp"])]
+		"sskill":
+			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
+			return "%s\n명중%d 위력%d MP%d" % [ssk["name"], int(ssk.get("hit", 85)), int(ssk.get("power", 0)), int(ssk["mp"])]
+	return ""
+
+
+func _slot_chip(text: String, col: Color) -> Control:
+	var p := PanelContainer.new()
+	p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(col, 0.18)
+	st.border_color = Color(col, 0.8)
+	st.border_width_left = 4
+	st.border_width_top = 1
+	st.border_width_bottom = 1
+	st.border_width_right = 1
+	st.set_corner_radius_all(6)
+	st.content_margin_left = 6
+	st.content_margin_right = 4
+	st.content_margin_top = 2
+	st.content_margin_bottom = 2
+	p.add_theme_stylebox_override("panel", st)
+	var l := UIKit.label(text, 14)
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF
+	l.clip_text = true
+	l.custom_minimum_size = Vector2(0, 36)
+	p.add_child(l)
+	return p
+
+
+## 지형 칸을 눌렀을 때: 속성별 등급 (원작의 지형 창처럼)
+func _terrain_grade_row(tid: String) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	for el in ["grass", "fire", "water", "wind"]:
+		var g := GameData.terrain_grade(tid, el)
+		row.add_child(_slot_chip("%s %s\n%s%d%%" % [GameData.element_name(el), GameData.grade_mark(g), "+" if g > 0 else "-", absi(g)] if g != 0 else "%s =\n0%%" % GameData.element_name(el), GameData.element_color(el)))
+	return row
 
 
 func _unit_tag(u: BattleUnit) -> String:

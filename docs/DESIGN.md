@@ -131,6 +131,7 @@
 | `data/skills.json` | 정령 스킬 |
 | `data/summoner.json` | 정령사 능력치·소환/디스펠 설정 |
 | `data/summoner_skills.json` | 정령사 스킬 (공격/회복/버프/디버프) |
-| `data/equipment.json` | 장비 |
+| `data/items.json` | 아이템 (장비·도구·재료) |
+| `data/recipes.json` | 합성표 (비공개 레시피) |
 | `data/terrain.json` | 지형 효과 |
 | `data/chapter1.json` | 챕터 1: 지역 이름, 스테이지, 대화 |

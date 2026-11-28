@@ -25,6 +25,9 @@ var done := false          # 이번 진영 턴에 행동을 마침
 var buffs: Array = []
 ## 상태이상 (원작 5종): "" / poison 독 / sleep 잠 / confusion 혼란 / slow 지체 / petrify 석화. 한 번에 하나.
 var status := ""
+## 아이템: 부활 장비를 이번 전투에 썼는가 (여러 개 들어도 1회), 매듭 향 등 다음 디스펠 보너스
+var revive_used := false
+var bind_bonus := 0.0
 var status_turns := 0
 const STATUS_NAMES := {"poison": "독", "sleep": "잠", "confusion": "혼란", "slow": "지체", "petrify": "석화"}
 const STATUS_COLORS := {"poison": Color(0.7, 0.4, 0.95), "sleep": Color(0.55, 0.7, 1.0), "confusion": Color(1.0, 0.75, 0.3), "slow": Color(0.6, 0.85, 0.6), "petrify": Color(0.7, 0.7, 0.72)}

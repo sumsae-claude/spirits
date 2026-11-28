@@ -12,10 +12,10 @@ const ICON_SIZE := 72.0
 ## 대륙 지도에서 각 속성 지역의 위치 (지도 영역 비율)
 const REGION_POS := {"wind": Vector2(0.27, 0.2), "fire": Vector2(0.75, 0.27), "water": Vector2(0.72, 0.76), "grass": Vector2(0.26, 0.72)}
 const CITY_POS := Vector2(0.5, 0.48)
-const TYPE_LABEL := {"battle": "전투", "boss": "수호", "event": "?", "shop": "상점", "town": "마을"}
+const TYPE_LABEL := {"battle": "전투", "boss": "수호", "event": "?", "shop": "상점", "town": "마을", "gather": "채집"}
 const TYPE_COLOR := {
 	"battle": Color(0.72, 0.32, 0.3), "boss": Color(0.85, 0.2, 0.35), "event": Color(0.55, 0.4, 0.8),
-	"shop": Color(0.85, 0.65, 0.25), "town": Color(0.3, 0.65, 0.45),
+	"shop": Color(0.85, 0.65, 0.25), "town": Color(0.3, 0.65, 0.45), "gather": Color(0.45, 0.7, 0.3),
 }
 
 var mode := "region"          # "continent" | "region"
@@ -123,7 +123,7 @@ func _default_node() -> int:
 	for i in nodes.size():
 		var n: Dictionary = nodes[i]
 		var t := str(n.get("type", "battle"))
-		if GameState.node_unlocked(chapter, n) and not GameState.is_cleared(str(n["id"])) and t != "shop" and t != "town":
+		if GameState.node_unlocked(chapter, n) and not GameState.is_cleared(str(n["id"])) and t != "shop" and t != "town" and t != "gather":
 			return i
 	return _token_node()
 
@@ -446,7 +446,14 @@ func _build_region_panel() -> void:
 		"shop":
 			status = "언제든 들를 수 있는 상점" if unlocked else "아직 갈 수 없습니다"
 		"town":
-			status = "의뢰 게시판 · 저장 · 거점" if unlocked else "아직 갈 수 없습니다"
+			status = "의뢰 게시판 · 저장 · 합성 · 거점" if unlocked else "아직 갈 수 없습니다"
+		"gather":
+			if not unlocked:
+				status = "아직 갈 수 없습니다"
+			elif GameState.gather_ready(n):
+				status = "재료를 채집할 수 있다"
+			else:
+				status = "다 캤다. 전투를 몇 번 하고 오면 다시 자란다"
 	panel_box.add_child(UIKit.label(status, 21, UIKit.MUTED))
 	panel_box.add_child(UIKit.label(GameState.fill_text(str(n.get("desc", ""))), 23))
 	if t == "battle" or t == "boss":
@@ -454,8 +461,8 @@ func _build_region_panel() -> void:
 		var rewards := PackedStringArray()
 		var rw: Dictionary = n.get("rewards", {})
 		for item in rw.get("items", []):
-			if GameData.equipment.has(str(item)):
-				rewards.append(str(GameData.equipment[str(item)]["name"]))
+			if GameData.items.has(str(item)):
+				rewards.append(GameData.item_name(str(item)))
 		if not rewards.is_empty() or int(rw.get("gold", 0)) > 0:
 			var rrow := HBoxContainer.new()
 			rrow.add_theme_constant_override("separation", 10)
@@ -481,6 +488,9 @@ func _build_region_panel() -> void:
 			action = "상점 들어가기"
 		"town":
 			action = "마을 들어가기"
+		"gather":
+			action = "채집하기"
+			blocked = blocked or not GameState.gather_ready(n)
 	panel_box.add_child(UIKit.button(action, _on_node_action, blocked or _busy))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
@@ -577,6 +587,8 @@ func _on_node_action() -> void:
 		"town":
 			GameState.mark_visited(str(n["id"]))
 			_open_town(n)
+		"gather":
+			_do_gather(n)
 	_busy = false
 	_rebuild_panel()
 
@@ -626,7 +638,11 @@ func _shop_stock() -> Array:
 		var i := rng.randi() % pool.size()
 		var eid := str(pool[i])
 		pool.remove_at(i)
-		if GameData.equipment.has(eid):
+		if GameData.items.has(eid):
+			stock.append(eid)
+	# 기본 도구·재료는 늘 판다
+	for eid in ["herb_potion", "mana_water", "clean_herb", "herb"]:
+		if not stock.has(eid):
 			stock.append(eid)
 	return stock
 
@@ -654,7 +670,7 @@ func _rebuild_shop() -> void:
 		for o in GameState.inventory:
 			counts[str(o)] = int(counts.get(str(o), 0)) + 1
 		if counts.is_empty():
-			list.add_child(UIKit.label("팔 수 있는 장비가 없습니다. (장착 중인 장비는 팔 수 없어요)", 22, UIKit.MUTED))
+			list.add_child(UIKit.label("팔 수 있는 물건이 없습니다. (소지창에 든 것은 팔 수 없어요)", 22, UIKit.MUTED))
 		for eid in counts:
 			var sell := GameData.equipment_price(str(eid)) / 2
 			list.add_child(_shop_row(str(eid), sell, "×%d" % int(counts[eid]), "팔기", _sell.bind(str(eid)), false))
@@ -664,9 +680,14 @@ func _rebuild_shop() -> void:
 func _shop_row(eid: String, price: int, extra: String, verb: String, cb: Callable, disabled: bool) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
-	var e: Dictionary = GameData.equipment[eid]
-	var info := UIKit.label("%s [%s] %s\n%s" % [e["name"], GameData.SLOT_NAMES.get(str(e["slot"]), ""), extra,
-		GameData.bonus_text(e["bonus"])], 22)
+	var e: Dictionary = GameData.items[eid]
+	var kind := str(e.get("kind", ""))
+	var line2 := GameData.bonus_text(e.get("bonus", {})) if kind == "equip" else str(e.get("desc", ""))
+	if e.has("special"):
+		line2 += " · " + GameData.special_name(str(e["special"]))
+	var info := UIKit.label("%s [%s] %s\n%s" % [e["name"], GameData.KIND_NAMES.get(kind, ""), extra, line2], 21)
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(info)
 	var tag := UIKit.gold_badge(price, 20)
 	tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -691,7 +712,7 @@ func _buy(eid: String) -> void:
 	GameState.gold -= price
 	GameState.inventory.append(eid)
 	GameState.save_game()
-	shop_msg = "%s을(를) 샀습니다." % GameData.equipment[eid]["name"]
+	shop_msg = "%s을(를) 샀습니다." % GameData.item_name(eid)
 	_rebuild_shop.call_deferred()
 
 
@@ -702,7 +723,7 @@ func _sell(eid: String) -> void:
 	var price := GameData.equipment_price(eid) / 2
 	GameState.gold += price
 	GameState.save_game()
-	shop_msg = "%s을(를) %d골드에 팔았습니다." % [GameData.equipment[eid]["name"], price]
+	shop_msg = "%s을(를) %d골드에 팔았습니다." % [GameData.item_name(eid), price]
 	_rebuild_shop.call_deferred()
 
 
@@ -710,6 +731,24 @@ func _sell(eid: String) -> void:
 
 var town_node: Dictionary = {}
 var town_msg: Array[String] = []
+
+
+func _do_gather(n: Dictionary) -> void:
+	var got := GameState.gather(n)
+	var names := PackedStringArray()
+	for iid in got:
+		names.append(GameData.item_name(str(iid)))
+	var vb := _open_overlay(GameState.fill_text(str(n.get("name", "채집"))))
+	vb.add_child(UIKit.label("채집했다!" if not got.is_empty() else "아무것도 없었다.", 30, UIKit.GOOD, true))
+	vb.add_child(UIKit.label(", ".join(names), 26, Color.WHITE, true))
+	vb.add_child(UIKit.label("거점·마을의 '가방 · 합성'에서 섞어 보세요.", 20, UIKit.MUTED, true))
+	vb.add_child(UIKit.spacer())
+	vb.add_child(UIKit.button("확인", _close_overlay, false, 64))
+
+
+func _open_craft() -> void:
+	var w := CraftScreen.open(self)
+	w.closed.connect(_rebuild_town)
 
 
 func _open_town(n: Dictionary) -> void:
@@ -734,6 +773,7 @@ func _rebuild_town() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	row.add_child(UIKit.button("저장", _town_save, false, 64))
+	row.add_child(UIKit.button("합성", _open_craft, false, 64))
 	row.add_child(UIKit.button("거점으로", _on_hub, false, 64))
 	row.add_child(UIKit.button("나가기", _close_overlay, false, 64))
 	vb.add_child(row)
@@ -766,8 +806,8 @@ func _quest_card(q: Dictionary) -> Control:
 		rrow.add_child(UIKit.gold_badge(int(rw["gold"]), 18))
 	var items := PackedStringArray()
 	for item in rw.get("items", []):
-		if GameData.equipment.has(str(item)):
-			items.append(str(GameData.equipment[str(item)]["name"]))
+		if GameData.items.has(str(item)):
+			items.append(GameData.item_name(str(item)))
 	if not items.is_empty():
 		rrow.add_child(UIKit.label(", ".join(items), 19, UIKit.GOOD))
 	vb.add_child(rrow)
@@ -826,9 +866,9 @@ func _choose_event(n: Dictionary, choice: Dictionary) -> void:
 		if eff.has("gold"):
 			GameState.gold += int(eff["gold"])
 			lines.append("@gold:%d:" % int(eff["gold"]))
-		if eff.has("item") and GameData.equipment.has(str(eff["item"])):
+		if eff.has("item") and GameData.items.has(str(eff["item"])):
 			GameState.inventory.append(str(eff["item"]))
-			lines.append("장비 획득: %s" % GameData.equipment_desc(str(eff["item"])))
+			lines.append("획득: %s" % GameData.equipment_desc(str(eff["item"])))
 		if eff.has("heal"):
 			GameState.heal_all()
 			lines.append("모두 회복했다.")

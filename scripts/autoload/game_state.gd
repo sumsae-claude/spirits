@@ -22,7 +22,8 @@ const RIVAL_NAMES := ["카렌", "도윤", "세라", "모로", "이안", "루카"
 var summoner: Summoner = null
 var party: Array = []      # 계약한 정령 전부 = 보관함 (Spirit). 첫 번째가 선봉 (전투 시작 때 자동 소환)
 var storage: Array = []    # 예전 저장 데이터 호환용. 불러올 때 party로 합치므로 늘 비어 있음
-var inventory: Array = []  # 장착하지 않은 장비 id
+var inventory: Array = []  # 공용 가방: 소지창에 넣지 않은 아이템 id (장비·도구·재료)
+var known_recipes: Array = []  # 합성에 성공해 알게 된 레시피 번호
 var battles_won: int = 0
 var gold: int = 0
 ## 마을 의뢰: 의뢰 id -> {"state": "active"|"claimed", "progress": int, "el": 속성(계약·퇴치 의뢰)}
@@ -46,7 +47,9 @@ func new_game(p_name: String, element: String) -> void:
 	summoner = Summoner.create_summoner(nm.left(8), element, STARTER_LEVEL)
 	party = [Spirit.create(str(STARTERS[element]), STARTER_LEVEL)]
 	storage = []
-	inventory = ["wood_wand", "leaf_charm", "conductor_staff", "sage_robe"]
+	inventory = ["wood_wand", "leaf_charm", "conductor_staff", "sage_robe", "herb_potion", "herb", "herb"]
+	summoner.items = ["herb_potion", "", ""]
+	known_recipes = []
 	battles_won = 0
 	gold = 50
 	quests = {}
@@ -140,6 +143,7 @@ func _write_save(path: String) -> void:
 		"party": party.map(func(s): return s.to_dict()),
 		"storage": storage.map(func(s): return s.to_dict()),
 		"inventory": inventory,
+		"known_recipes": known_recipes,
 		"battles_won": battles_won,
 		"gold": gold,
 		"quests": quests,
@@ -182,8 +186,13 @@ func _read_save(path: String) -> bool:
 	var inv = data.get("inventory", [])
 	if typeof(inv) == TYPE_ARRAY:
 		for e in inv:
-			if GameData.equipment.has(str(e)):
+			if GameData.items.has(str(e)):
 				inventory.append(str(e))
+	known_recipes = []
+	var kr = data.get("known_recipes", [])
+	if typeof(kr) == TYPE_ARRAY:
+		for r in kr:
+			known_recipes.append(int(r))
 	battles_won = int(data.get("battles_won", 0))
 	gold = maxi(0, int(data.get("gold", 0)))
 	var qd = data.get("quests", {})
@@ -255,22 +264,80 @@ func add_captured(s: Spirit) -> String:
 	return "보관함에 들어감"
 
 
-func equip(s: Spirit, eid: String) -> void:
-	if not inventory.has(eid) or not GameData.equipment.has(eid):
+## 가방의 아이템을 소지창 idx 칸에 넣는다 (그 칸에 있던 것은 가방으로)
+func equip(s: Spirit, eid: String, idx: int = -1) -> void:
+	if not inventory.has(eid) or not GameData.holdable(eid):
 		return
-	var slot := str(GameData.equipment[eid]["slot"])
-	unequip(s, slot)
+	if idx < 0:
+		idx = s.free_slot()
+	if idx < 0 or idx >= s.items.size():
+		return
+	unequip(s, idx)
 	inventory.erase(eid)
-	s.equipment[slot] = eid
+	s.items[idx] = eid
 	s.clamp_vitals()
 
 
-func unequip(s: Spirit, slot: String) -> void:
-	var current := str(s.equipment.get(slot, ""))
+func unequip(s: Spirit, idx: int) -> void:
+	if idx < 0 or idx >= s.items.size():
+		return
+	var current := str(s.items[idx])
 	if current != "":
 		inventory.append(current)
-	s.equipment[slot] = ""
+	s.items[idx] = ""
 	s.clamp_vitals()
+
+
+func item_count(iid: String) -> int:
+	return inventory.count(iid)
+
+
+func add_item(iid: String, n: int = 1) -> void:
+	if GameData.items.has(iid):
+		for i in n:
+			inventory.append(iid)
+
+
+# ---------------------------------------------------------------- 합성 (레시피 비공개)
+
+## 재료 묶음 {id: 개수}에 맞는 레시피 번호 (없으면 -1). 개수까지 정확히 같아야 한다
+func find_recipe(mix: Dictionary) -> int:
+	for i in GameData.recipes.size():
+		var need: Dictionary = GameData.recipes[i]["in"]
+		if need.size() != mix.size():
+			continue
+		var ok := true
+		for k in need:
+			if int(mix.get(k, 0)) != int(need[k]):
+				ok = false
+				break
+		if ok:
+			return i
+	return -1
+
+
+## 합성 시도: 성공하면 결과 아이템, 실패하면 재료 하나를 잃는다. {"ok", "out", "lost", "new"}
+func craft(mix: Dictionary) -> Dictionary:
+	for k in mix:
+		if item_count(str(k)) < int(mix[k]):
+			return {"ok": false, "error": "재료가 모자랍니다."}
+	var ri := find_recipe(mix)
+	if ri < 0:
+		var keys := mix.keys()
+		var lost := str(keys[randi() % keys.size()])
+		inventory.erase(lost)
+		save_game()
+		return {"ok": false, "lost": lost}
+	for k in mix:
+		for i in int(mix[k]):
+			inventory.erase(str(k))
+	var out := str(GameData.recipes[ri]["out"])
+	inventory.append(out)
+	var fresh := not known_recipes.has(ri)
+	if fresh:
+		known_recipes.append(ri)
+	save_game()
+	return {"ok": true, "out": out, "new": fresh, "recipe": ri}
 
 
 func make_encounter() -> Array:
@@ -311,6 +378,7 @@ func start_battle(kind: String = "wild") -> void:
 		current_rival = make_rival()
 	else:
 		current_encounter = make_encounter()
+	_arm_enemies()
 	heal_all()
 	get_tree().change_scene_to_file("res://scenes/battle.tscn")
 
@@ -402,6 +470,34 @@ func chapter_unlocked(ci: int) -> bool:
 	return ci == 0 or (ci < GameData.chapters.size() and chapter_complete(ci - 1))
 
 
+# ---------------------------------------------------------------- 채집 지점
+
+const GATHER_COOLDOWN := 2   # 승리 이만큼 하고 오면 다시 채집
+
+func gather_ready(n: Dictionary) -> bool:
+	var key := "gather_" + str(n["id"])
+	return not flags.has(key) or battles_won - int(flags[key]) >= GATHER_COOLDOWN
+
+
+## 채집: drops에서 2~3개 ("@reg_mat" = 이 지역 속성 재료). 얻은 아이템 id 목록
+func gather(n: Dictionary) -> Array:
+	var got := []
+	if not gather_ready(n):
+		return got
+	var drops: Array = n.get("drops", ["herb"])
+	var count := 2 + randi() % 2
+	for i in count:
+		var iid := str(drops[randi() % drops.size()])
+		if iid == "@reg_mat":
+			iid = GameData.element_material(region_element())
+		if GameData.items.has(iid):
+			inventory.append(iid)
+			got.append(iid)
+	flags["gather_" + str(n["id"])] = battles_won
+	mark_visited(str(n["id"]))
+	return got
+
+
 ## 이벤트·상점·마을 지점을 지나간 것으로 기록
 func mark_visited(node_id: String) -> void:
 	if not cleared_stages.has(node_id):
@@ -474,7 +570,7 @@ func claim_quest(q: Dictionary) -> Array[String]:
 		gold += int(rw["gold"])
 		lines.append("@gold:%d:의뢰 보상" % int(rw["gold"]))
 	for item in rw.get("items", []):
-		if GameData.equipment.has(str(item)):
+		if GameData.items.has(str(item)):
 			inventory.append(str(item))
 			lines.append("의뢰 보상: %s" % GameData.equipment_desc(str(item)))
 	save_game()
@@ -664,6 +760,22 @@ func _scaled_spirit(sid: String, base_lv: int, off: int) -> Spirit:
 	return s
 
 
+## 적도 도구를 쓴다: 정령은 30%, 적 정령사는 늘 회복약 하나 (원작처럼 적도 아이템 사용)
+func _arm_enemies() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var list: Array = current_encounter.duplicate()
+	if not current_rival.is_empty():
+		list.append_array(current_rival["party"])
+		var m: Spirit = current_rival["summoner"]
+		if m.free_slot() >= 0:
+			m.items[m.free_slot()] = "herb_potion" if m.level < 12 else "herb_potion2"
+	for o in list:
+		var sp: Spirit = o
+		if sp.free_slot() >= 0 and rng.randf() < 0.3:
+			sp.items[sp.free_slot()] = "herb_potion" if rng.randf() < 0.6 else GameData.random_tool(rng)
+
+
 ## 스테이지 전투 시작: 적 구성을 만들어 전투 씬으로
 func start_stage(stage: Dictionary) -> void:
 	current_encounter = []
@@ -692,6 +804,8 @@ func start_stage(stage: Dictionary) -> void:
 	# 고정 튜토리얼 스크립트는 처음 깰 때만
 	if not is_cleared(str(stage["id"])):
 		current_stage["script"] = stage.get("script", [])
+	if (current_stage["script"] as Array).is_empty():
+		_arm_enemies()
 	heal_all()
 	get_tree().change_scene_to_file("res://scenes/battle.tscn")
 
@@ -712,7 +826,7 @@ func complete_stage(stage_id: String) -> Array[String]:
 		lines.append("스테이지 %s 첫 클리어!" % stage_id)
 		var rw: Dictionary = stage.get("rewards", {})
 		for item in rw.get("items", []):
-			if GameData.equipment.has(str(item)):
+			if GameData.items.has(str(item)):
 				inventory.append(str(item))
 				lines.append("클리어 보상: %s" % GameData.equipment_desc(str(item)))
 		if int(rw.get("gold", 0)) > 0:

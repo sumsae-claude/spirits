@@ -12,12 +12,15 @@ const ELEMENT_COLORS := {
 const STRONG_AGAINST := {"wind": "fire", "fire": "grass", "grass": "water", "water": "wind"}
 const STRONG_MULT := 1.5
 const WEAK_MULT := 0.75
-const SLOT_NAMES := {"weapon": "무기", "accessory": "장신구"}
-const SLOTS := ["weapon", "accessory"]
+## 소지창: 유닛마다 3칸 (장비·도구 아무거나). 나머지는 공용 가방(GameState.inventory)
+const HOLD_SLOTS := 3
+const KIND_NAMES := {"equip": "장비", "tool": "도구", "material": "재료"}
 
 var species: Dictionary = {}
 var skills: Dictionary = {}
-var equipment: Dictionary = {}
+var items: Dictionary = {}      # 모든 아이템 (장비·도구·재료)
+var equipment: Dictionary = {}  # 그중 장비만
+var recipes: Array = []         # 합성표 (비공개, 성공하면 알게 됨)
 var terrains: Dictionary = {}
 var summoner_data: Dictionary = {}
 var summoner_skills: Dictionary = {}
@@ -34,7 +37,15 @@ var theme: Theme
 func _ready() -> void:
 	species = _load_json("res://data/spirits.json")
 	skills = _load_json("res://data/skills.json")
-	equipment = _load_json("res://data/equipment.json")
+	items = _load_json("res://data/items.json")
+	for iid in items:
+		if str(items[iid].get("kind", "")) == "equip":
+			equipment[iid] = items[iid]
+	var rf := FileAccess.open("res://data/recipes.json", FileAccess.READ)
+	if rf != null:
+		var parsed = JSON.parse_string(rf.get_as_text())
+		if typeof(parsed) == TYPE_ARRAY:
+			recipes = parsed
 	terrains = _load_json("res://data/terrain.json")
 	summoner_data = _load_json("res://data/summoner.json")
 	summoner_skills = _load_json("res://data/summoner_skills.json")
@@ -59,6 +70,14 @@ func _setup_chapters() -> void:
 		if i == stages.size() - 1:
 			st["goal"] = true
 		nodes.append(st)
+	# 곁가지 지점 (채집 등): "after" 지점에서 이어짐
+	for o in chapter1.get("side_nodes", []):
+		var side: Dictionary = (o as Dictionary).duplicate()
+		side["links"] = []
+		for n in nodes:
+			if str(n["id"]) == str(side.get("after", "")):
+				(n["links"] as Array).append(str(side["id"]))
+		nodes.append(side)
 	chapter1["nodes"] = nodes
 
 
@@ -97,11 +116,24 @@ func speaker_portrait_table() -> Dictionary:
 	return table
 
 
-## 장비 가격 (equipment.json의 price, 없으면 능력치로 계산)
+func item_kind(iid: String) -> String:
+	return str(items[iid].get("kind", "")) if items.has(iid) else ""
+
+
+func item_name(iid: String) -> String:
+	return str(items[iid]["name"]) if items.has(iid) else "없음"
+
+
+## 소지창에 넣을 수 있는가 (장비·도구. 재료는 가방에만)
+func holdable(iid: String) -> bool:
+	return item_kind(iid) == "equip" or item_kind(iid) == "tool"
+
+
+## 아이템 가격 (items.json의 price, 없으면 능력치로 계산)
 func equipment_price(eid: String) -> int:
-	if not equipment.has(eid):
+	if not items.has(eid):
 		return 0
-	var e: Dictionary = equipment[eid]
+	var e: Dictionary = items[eid]
 	if e.has("price"):
 		return int(e["price"])
 	var weights := {"hp": 4, "mp": 5, "atk": 16, "def": 15, "spd": 12, "mov": 70}
@@ -229,7 +261,10 @@ func wild_pool() -> Array:
 
 
 func random_equipment(rng: RandomNumberGenerator) -> String:
-	var keys := equipment.keys()
+	var keys := []
+	for k in equipment:
+		if not equipment[k].has("special"):
+			keys.append(k)
 	return str(keys[rng.randi() % keys.size()])
 
 
@@ -337,7 +372,59 @@ func element_chart_text() -> String:
 
 
 func equipment_desc(eid: String) -> String:
-	if not equipment.has(eid):
+	if not items.has(eid):
 		return "없음"
-	var e: Dictionary = equipment[eid]
-	return "%s (%s)" % [e["name"], bonus_text(e["bonus"])]
+	var e: Dictionary = items[eid]
+	match str(e.get("kind", "")):
+		"equip":
+			var b := bonus_text(e.get("bonus", {}))
+			if e.has("special"):
+				b += (", " if b != "" else "") + special_name(str(e["special"]))
+			return "%s (%s)" % [e["name"], b]
+		"tool":
+			return "%s (도구)" % e["name"]
+	return "%s (재료)" % e["name"]
+
+
+func special_name(sp: String) -> String:
+	return {"revive": "부활 1회", "bind": "디스펠+10%"}.get(sp, sp)
+
+
+## 아이템 한 줄 설명 (종류·효과·범위)
+func item_info(iid: String) -> String:
+	if not items.has(iid):
+		return ""
+	var e: Dictionary = items[iid]
+	var head := "%s [%s]" % [e["name"], KIND_NAMES.get(str(e.get("kind", "")), "")]
+	if str(e.get("kind", "")) == "tool":
+		var r: Array = e.get("range", [0, 1])
+		head += " 사거리 %d~%d%s" % [int(r[0]), int(r[1]), (" 범위 %d" % int(e.get("area", 0))) if int(e.get("area", 0)) > 0 else ""]
+	elif str(e.get("kind", "")) == "equip":
+		head += " " + equipment_desc(iid).trim_prefix(str(e["name"]) + " ")
+	return "%s\n%s" % [head, str(e.get("desc", ""))]
+
+
+## 재료 중 그 속성 것 (쓰러뜨린 정령이 떨어뜨림)
+func element_material(el: String) -> String:
+	for iid in items:
+		if item_kind(iid) == "material" and str(items[iid].get("element", "")) == el:
+			return iid
+	return "herb"
+
+
+func random_tool(rng: RandomNumberGenerator, cheap := true) -> String:
+	var pool := []
+	for iid in items:
+		if item_kind(iid) == "tool" and (not cheap or int(items[iid].get("price", 0)) <= 80):
+			pool.append(iid)
+	return str(pool[rng.randi() % pool.size()])
+
+
+func random_material(rng: RandomNumberGenerator) -> String:
+	var pool := []
+	for iid in items:
+		if item_kind(iid) == "material":
+			pool.append(iid)
+			if iid != "spirit_stone":
+				pool.append(iid)  # 정령석은 드물게
+	return str(pool[rng.randi() % pool.size()])

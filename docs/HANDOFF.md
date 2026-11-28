@@ -74,6 +74,9 @@
 - **1-1 소환 단계**: 화면에 따라 대사 3종(`t` 메뉴 / `t_sheet` 소환 창 / `t_place` 칸 고르기, `script_sub`). 첫 소환 창 안내(`*` summon_sheet)
 - 새 class_name 스크립트를 만들면 `godot --headless --path . --import`로 클래스 캐시를 갱신해야 테스트가 인식함
 
+## ★ 다음 수정 목록 (사용자가 "한 번에 수정"할 때 반영 — 아직 안 함)
+1. **유닛 정보 창을 오른쪽 위로**: 위쪽 HUD(턴 종료·후퇴·?·배속) 배속 버튼 아래에 **'유닛정보'** 버튼. 누르면 그 아래에 지금 유닛의 상태창(`_status_card`)이 펼쳐지고, 다시 누르면 숨김. 펼친 동안 다른 유닛을 누르면 그 유닛 정보로 바뀜. 아래 패널의 상태창은 빼고 안내·기록만 (열림 여부는 flags에 기억). 사용자는 가로 화면(태블릿)에서도 플레이 — 양옆 여백이 넓음
+
 ## C단계: 아이템 시스템 (완료, 사용자 확정 설계)
 - 데이터 `data/items.json` (kind: equip 장비 / tool 도구 / material 재료), 합성표 `data/recipes.json` (비공개). `equipment.json`은 없앰. `GameData.items`(전부)·`GameData.equipment`(장비만)·`item_info`·`element_material`·`random_tool`
 - **소지창 3칸** `Spirit.items` (장비·도구 아무거나, 옛 저장 무기·장신구 → 1·2칸으로 이전 `load_items`). 나머지 = 공용 가방 `GameState.inventory`. 편집 `EquipEditor`(거점 상세·전투 소환 창)

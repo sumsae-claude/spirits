@@ -78,13 +78,36 @@ func species() -> Dictionary:
 			"wild": false,
 			"catch": 0.0,
 			"desc": "%s의 정령사. 정령을 소환하고, 디스펠로 야생 정령과 계약한다." % GameData.element_name(element_id),
-			"base": d.get("base", {}),
-			"growth": d.get("growth", {}),
+			"base": _scaled(d.get("base", {})),
+			"growth": _scaled(d.get("growth", {})),
 			"skills": [],
 			"evolves_to": "",
 			"evolve_level": 0,
 		}
 	return _species_cache
+
+
+## 정령사 속성별 개성 (summoner.json profiles): 물 = 공격↓ 마력↑ 디스펠↑, 불 = 공격↑ 마력↓ 디스펠↓, 풀·바람 = 보통 + 동반자
+func profile() -> Dictionary:
+	return (GameData.summoner_data.get("profiles", {}) as Dictionary).get(element_id, {})
+
+
+func _scaled(stats: Dictionary) -> Dictionary:
+	var mult: Dictionary = profile().get("stat", {})
+	var out := {}
+	for k in stats:
+		out[k] = float(stats[k]) * float(mult.get(k, 1.0))
+	return out
+
+
+## 정령사 공격(기본 공격·공격 마법) 위력 배율
+func power_mult() -> float:
+	return float(profile().get("power", 1.0))
+
+
+## 디스펠 기본 성공률 (대상 HP·레벨·상성 보정 전)
+func dispel_base() -> float:
+	return float(profile().get("dispel_base", 0.15))
 
 
 func _cfg(key: String) -> Variant:
@@ -112,11 +135,11 @@ func dispel_cost() -> int:
 
 
 func dispel_range() -> int:
-	return int(GameData.summoner_data.get("dispel_range", 2))
+	return int(GameData.summoner_data.get("dispel_range", 3))
 
 
 func attack_power() -> int:
-	return int(GameData.summoner_data.get("attack_power", 30))
+	return int(round(float(GameData.summoner_data.get("attack_power", 30)) * power_mult()))
 
 
 func mp_regen() -> int:

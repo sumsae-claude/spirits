@@ -43,7 +43,8 @@ static func affinity_mult(target: Spirit) -> float:
 
 static func dispel_chance(caster: Spirit, target: Spirit, owned: bool = false) -> float:
 	var hp_ratio := float(target.hp) / float(maxi(1, target.max_hp()))
-	var chance := 0.15 + (1.0 - hp_ratio) * 0.6 + float(caster.level - target.level) * 0.04
+	var base := (caster as Summoner).dispel_base() if caster is Summoner else 0.15   # 정령사 속성별 기본치
+	var chance := base + (1.0 - hp_ratio) * 0.6 + float(caster.level - target.level) * 0.04
 	if GameData.STRONG_AGAINST.get(caster.element(), "") == target.element():
 		chance += 0.1
 	chance *= float(target.species().get("catch", 1.0))

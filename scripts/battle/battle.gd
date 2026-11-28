@@ -1504,12 +1504,7 @@ func _target_options(u: BattleUnit, t: BattleUnit) -> Array:
 			if str(action["type"]) == "dispel" and t.is_summoner:
 				continue
 			opts.append(_make_option(u, t, action, _action_name(u, action), _action_mp(u, action)))
-		if u.is_summoner:
-			var m: Summoner = u.spirit
-			for o in m.support_skill_ids():
-				var sk: Dictionary = GameData.summoner_skills[str(o)]
-				if str(sk.get("target", "")) == "enemy":
-					opts.append(_make_option(u, t, {"type": "sskill", "skill_id": str(o)}, str(sk["name"]), int(sk["mp"])))
+		# 정령사의 '스킬'(지원·약화, 반격 없음)은 여기 넣지 않는다 — 스킬 메뉴에서만 (사용자 요청)
 	elif u.is_summoner:
 		var m: Summoner = u.spirit
 		for o in m.skill_ids:
@@ -1545,6 +1540,14 @@ func _make_option(u: BattleUnit, t: BattleUnit, action: Dictionary, name_text: S
 
 
 ## 반격을 부르는 공격인가 (공격 탭의 피해 행동)
+## 정령사 공격 마법 위력 (속성별 배율: 불 셈, 물 약함)
+func _ssk_power(u: BattleUnit, ssk: Dictionary) -> int:
+	var p := float(ssk.get("power", 0))
+	if u.spirit is Summoner:
+		p *= (u.spirit as Summoner).power_mult()
+	return int(round(p))
+
+
 func _is_tab_attack(action: Dictionary) -> bool:
 	match str(action.get("type", "")):
 		"attack", "skill":
@@ -1565,7 +1568,7 @@ func _expected_damage(u: BattleUnit, from_cell: Vector2i, t: BattleUnit, action:
 		"sskill":
 			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
 			if str(ssk.get("type", "")) == "attack":
-				return _damage(u, from_cell, t, int(ssk["power"]), str(ssk["element"]), false)
+				return _damage(u, from_cell, t, _ssk_power(u, ssk), str(ssk["element"]), false)
 	return 0
 
 
@@ -1919,7 +1922,7 @@ func _tab_attack(u: BattleUnit, target: BattleUnit, action: Dictionary) -> void:
 	elif kind == "sskill":
 		var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
 		u.spirit.mp = maxi(0, u.spirit.mp - int(ssk["mp"]))
-		power = int(ssk["power"])
+		power = _ssk_power(u, ssk)
 		name_text = str(ssk["name"])
 	var response: String = await _choose_response(u, target, action)
 	var chance := _hit_chance(u, target, action, response == "defend")
@@ -2349,7 +2352,7 @@ func _cast_summoner_skill(u: BattleUnit, target: BattleUnit, sk: Dictionary) -> 
 	var skill_name := str(sk["name"])
 	match str(sk["type"]):
 		"attack":
-			var dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), true)
+			var dmg := _damage(u, u.cell, target, _ssk_power(u, sk), str(sk["element"]), true)
 			_hit(u, target, dmg, skill_name, str(sk["element"]))
 		"heal":
 			for o in _skill_area_units(u, target, sk):
@@ -2655,7 +2658,7 @@ func _enemy_summoner_skill_plan(u: BattleUnit, m: Summoner) -> Dictionary:
 						if ratio < 0.5:
 							score += float(mini(BattleLogic.heal_amount(m, ally.spirit, sk), ally.spirit.max_hp() - ally.spirit.hp))
 				"attack":
-					var dmg := _damage(u, u.cell, target, int(sk["power"]), str(sk["element"]), false)
+					var dmg := _damage(u, u.cell, target, _ssk_power(u, sk), str(sk["element"]), false)
 					score = float(mini(dmg, target.spirit.hp)) + (30.0 if dmg >= target.spirit.hp else 0.0)
 			if score > best_score:
 				best_score = score
@@ -3368,7 +3371,7 @@ func _preview_for(u: BattleUnit, action: Dictionary, t: BattleUnit) -> String:
 			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
 			match str(ssk["type"]):
 				"attack":
-					return "-%d" % _damage(u, u.cell, t, int(ssk["power"]), str(ssk["element"]), false)
+					return "-%d" % _damage(u, u.cell, t, _ssk_power(u, ssk), str(ssk["element"]), false)
 				"cure":
 					return "정화" if t.status != "" else "-"
 				"heal":

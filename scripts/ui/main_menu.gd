@@ -57,6 +57,8 @@ func _show_starters() -> void:
 		var b := UIKit.button("%s의 정령사   (첫 정령: %s)" % [GameData.element_name(el), sp["name"]], func(): _choose(el), false, 88)
 		b.add_theme_color_override("font_color", GameData.element_color(el).lightened(0.35))
 		list.add_child(b)
+		var prof: Dictionary = (GameData.summoner_data.get("profiles", {}) as Dictionary).get(el, {})
+		list.add_child(UIKit.label("정령사: %s (디스펠 기본 %d%%)" % [str(prof.get("desc", "")), int(round(float(prof.get("dispel_base", 0.15)) * 100))], 21, Color(0.85, 0.85, 0.6)))
 		list.add_child(UIKit.label(str(sp["desc"]), 22, UIKit.MUTED))
 	vb.add_child(UIKit.button("뒤로", _on_back))
 

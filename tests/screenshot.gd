@@ -26,6 +26,10 @@ func _ready() -> void:
 	b._mark_ui()
 	await _frames(10)
 	_shot("1_status_summoner")
+	b._toggle_range_preview(b.summoner_unit, {"type": "dispel"})
+	await _frames(6)
+	_shot("1b_range_preview")
+	b._clear_range_preview()
 	# 정령사를 고르고 이동 범위
 	b.inspected = null
 	b._select_unit(b.summoner_unit)

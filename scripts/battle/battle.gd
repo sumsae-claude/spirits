@@ -52,7 +52,11 @@ var picked_this_move := false
 var popup_queue: Array = []   # 보여 줄 아이템 획득 팝업 [{"ids", "title"}]
 var attack_confirm: Control = null   # '공격 선택' 확인창 (원작처럼 기술·명중·피해 비교 후 확인)
 var confirm_pick := 0
-var status_holder: VBoxContainer     # 아래 패널의 유닛 상태창 (원작처럼 능력치·공격 3칸·소지품 3칸)
+var status_holder: VBoxContainer     # 유닛정보 창 내용 (오른쪽 위, '유닛정보' 버튼으로 열고 닫음)
+var info_panel: PanelContainer
+var info_toggle: Button
+var range_preview: Dictionary = {}   # 유닛정보에서 누른 공격 {"unit", "action"} → 맵에 사거리(노란 칸)
+var preview_range_cells: Dictionary = {}
 
 var grid: HexGrid
 var units: Array = []        # 전장에 있는 BattleUnit (귀환하면 빠진다)
@@ -2878,6 +2882,8 @@ func _draw() -> void:
 				draw_arc(center, HEX_SIZE * 0.8, 0.0, TAU, 36, Color(CIRCLE_ALLY, 0.6 + 0.4 * sin(time * 6.0)), 4.0)
 			if c == inspected_cell:
 				draw_polyline(outline, Color(0.6, 0.9, 1.0), 3.0)
+			if preview_range_cells.has(c):
+				draw_colored_polygon(grid.corners(center, HEX_SIZE - 3.0), Color(1.0, 0.85, 0.3, 0.42 + 0.12 * sin(time * 5.0)))
 			if range_cells.has(c):
 				var inner := grid.corners(center, HEX_SIZE - 6.0)
 				inner.append(inner[0])
@@ -3454,13 +3460,45 @@ func _build_ui() -> void:
 	turn_label.add_theme_font_size_override("font_size", 21)
 	turn_pill.add_child(turn_label)
 
+	# 오른쪽 위: [턴 종료 · 후퇴 · ? · 배속] 아래에 [유닛정보] 버튼, 그 아래에 유닛정보 창
+	var col := VBoxContainer.new()
+	col.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	col.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	col.offset_top = 14
+	col.offset_right = -14
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	col.add_theme_constant_override("separation", 6)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(col)
 	var right := HBoxContainer.new()
-	right.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	right.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	right.offset_top = 14
-	right.offset_right = -14
+	right.alignment = BoxContainer.ALIGNMENT_END
 	right.add_theme_constant_override("separation", 8)
-	ui_root.add_child(right)
+	right.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(right)
+	var row2 := HBoxContainer.new()
+	row2.alignment = BoxContainer.ALIGNMENT_END
+	row2.add_theme_constant_override("separation", 8)
+	row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(row2)
+	info_toggle = _hud_button("유닛정보", _toggle_info_panel)
+	info_toggle.custom_minimum_size = Vector2(0, 48)
+	row2.add_child(info_toggle)
+	info_panel = PanelContainer.new()
+	var ist := StyleBoxFlat.new()
+	ist.bg_color = Color(0.055, 0.063, 0.094, 0.94)
+	ist.border_color = UIKit.GOLD.darkened(0.15)
+	ist.set_border_width_all(2)
+	ist.set_corner_radius_all(14)
+	ist.content_margin_left = 12
+	ist.content_margin_right = 12
+	ist.content_margin_top = 10
+	ist.content_margin_bottom = 10
+	ist.shadow_color = Color(0, 0, 0, 0.5)
+	ist.shadow_size = 8
+	info_panel.add_theme_stylebox_override("panel", ist)
+	info_panel.custom_minimum_size = Vector2(400, 0)
+	info_panel.size_flags_horizontal = Control.SIZE_SHRINK_END
+	col.add_child(info_panel)
 	end_button = _hud_button("턴 종료", _on_end_phase)
 	end_button.custom_minimum_size = Vector2(0, 56)
 	right.add_child(end_button)
@@ -3519,7 +3557,7 @@ func _build_ui() -> void:
 	card.add_child(info_label)
 	status_holder = VBoxContainer.new()
 	status_holder.add_theme_constant_override("separation", 4)
-	vb.add_child(status_holder)
+	info_panel.add_child(status_holder)
 
 	hint_label = UIKit.label("", 22, UIKit.GOLD)
 	vb.add_child(hint_label)
@@ -4036,16 +4074,23 @@ func _rebuild_ui() -> void:
 	if shown == null and phase == "enemy":
 		shown = active
 	UIKit.clear(status_holder)
+	var panel_on := _info_panel_on()
+	info_toggle.text = "유닛정보 ▾" if panel_on else "유닛정보 ▸"
+	unit_card.visible = false   # 유닛 상태는 오른쪽 위 유닛정보 창에서
+	if not range_preview.is_empty() and range_preview.get("unit") != shown:
+		_clear_range_preview()
 	if inspected == null and grid.in_bounds(inspected_cell):
 		info_label.text = _terrain_info(inspected_cell)
 		unit_icon.texture = tile_tex.get(grid.terrain_at(inspected_cell), null)
-		status_holder.add_child(_terrain_grade_row(grid.terrain_at(inspected_cell)))
+		var tid := grid.terrain_at(inspected_cell)
+		status_holder.add_child(UIKit.label("%s — 속성별 유불리" % GameData.terrain_name(tid), 18, UIKit.GOLD))
+		status_holder.add_child(_terrain_grade_row(tid))
 	else:
 		info_label.text = _unit_info(shown)
 		unit_icon.texture = GameData.sprite_for(shown.spirit) if shown != null else null
 		if shown != null:
-			unit_card.visible = false
 			status_holder.add_child(_status_card(shown))
+	info_panel.visible = panel_on and status_holder.get_child_count() > 0 and phase != "over"
 	unit_icon.visible = unit_icon.texture != null
 
 	var anchor: BattleUnit = active
@@ -4257,7 +4302,7 @@ func _build_attack_tab() -> void:
 ## 큰 소환 창: 아래 패널을 위로 키워 목록(속성 탭·정렬) + 고른 정령 상세·장비 + 소환 버튼을 보여 준다.
 func _build_summon_list() -> void:
 	unit_card.visible = false
-	UIKit.clear(status_holder)
+	info_panel.visible = false
 	detail_label.visible = false
 	log_label.visible = false
 	summon_box.visible = true
@@ -4486,96 +4531,246 @@ func _unit_info(u: BattleUnit) -> String:
 		GameData.terrain_name(grid.terrain_at(u.cell)), GameData.grade_mark(g)]
 
 
-## 원작풍 유닛 상태창: [도트 | 이름·Lv·속성·HP/MP 막대 | 능력치] / 공격 3칸 / 소지품 3칸 (정령사는 다음 턴 MP)
+## 유닛정보 카드 (사용자 확정 샘플): 이름·Lv·속성 태그 / HP·MP 막대 / 능력치 4칸 / 공격 칩(이름 (MP) + 위력·명중%) / 소지품 칩 / 작은 한 줄
 func _status_card(u: BattleUnit) -> Control:
 	var s := u.spirit
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 4)
+	box.add_theme_constant_override("separation", 6)
 	var top := HBoxContainer.new()
 	top.add_theme_constant_override("separation", 10)
 	box.add_child(top)
 	var icon := TextureRect.new()
 	icon.texture = GameData.sprite_for(s)
-	icon.custom_minimum_size = Vector2(68, 68)
+	icon.custom_minimum_size = Vector2(60, 60)
 	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	top.add_child(icon)
 	var mid := VBoxContainer.new()
-	mid.add_theme_constant_override("separation", 1)
+	mid.add_theme_constant_override("separation", 2)
 	mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(mid)
-	var head := "[%s] %s  Lv.%d %s" % [_unit_tag(u), s.display_name(), s.level, GameData.element_name(s.element())]
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	mid.add_child(head)
+	var nm := UIKit.label(s.display_name(), 20, Color.WHITE)
+	nm.autowrap_mode = TextServer.AUTOWRAP_OFF
+	nm.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	head.add_child(nm)
+	var lv := UIKit.label("Lv.%d" % s.level, 15, UIKit.MUTED)
+	lv.autowrap_mode = TextServer.AUTOWRAP_OFF
+	lv.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	head.add_child(lv)
+	head.add_child(_tag(GameData.element_name(s.element()), GameData.element_color(s.element()).darkened(0.35)))
+	head.add_child(_tag(_unit_tag(u).replace(" (실 드러남)", ""), Color(0.2, 0.3, 0.45) if u.team == 0 else Color(0.45, 0.18, 0.18)))
 	if u.status != "":
-		head += "  [%s %d]" % [BattleUnit.STATUS_NAMES[u.status], u.status_turns]
-	mid.add_child(UIKit.label(head, 19, GameData.element_color(s.element()).lightened(0.45)))
-	mid.add_child(_vital_bar("HP", s.hp, s.max_hp(), 0, Color(0.4, 0.9, 0.45)))
-	mid.add_child(_vital_bar("MP", s.mp, s.max_mp(), 0, Color(0.45, 0.65, 1.0)))
-	if u.team == 0:
-		mid.add_child(UIKit.label("EXP %d/%d" % [s.xp, s.xp_to_next()], 14, UIKit.MUTED))
-	var stats := UIKit.label("공 %d  방 %d\n속 %d  이동 %d\n%s" % [s.stat("atk"), s.stat("def"), s.stat("spd"), s.stat("mov"),
-		("유지 %d · ♥%d" % [s.upkeep(), s.affinity]) if not u.is_summoner else "코스트 0"], 16)
-	top.add_child(stats)
-	# 공격 3칸 (정령사는 기본 공격 · 공격 마법 · 디스펠 GET)
+		head.add_child(_tag("%s %d" % [BattleUnit.STATUS_NAMES[u.status], u.status_turns], Color(BattleUnit.STATUS_COLORS[u.status], 0.55)))
+	var ratio := float(s.hp) / float(maxi(1, s.max_hp()))
+	var hp_col := Color(0.4, 0.9, 0.45) if ratio > 0.5 else (Color(0.95, 0.75, 0.25) if ratio > 0.25 else Color(1.0, 0.35, 0.3))
+	mid.add_child(_vital_bar("HP", s.hp, s.max_hp(), 0, hp_col))
+	mid.add_child(_vital_bar("MP", s.mp, s.max_mp(), 0, Color(0.45, 0.62, 1.0)))
+	# 능력치 4칸
+	var stats := HBoxContainer.new()
+	stats.add_theme_constant_override("separation", 5)
+	box.add_child(stats)
+	for pair in [["공격", s.stat("atk")], ["방어", s.stat("def")], ["속도", s.stat("spd")], ["이동", s.stat("mov")]]:
+		stats.add_child(_stat_box(str(pair[0]), int(pair[1])))
+	# 공격 칩 (누르면 사거리)
+	box.add_child(UIKit.label("공격 · 누르면 사거리 표시", 13, UIKit.MUTED))
 	var arow := HBoxContainer.new()
-	arow.add_theme_constant_override("separation", 4)
+	arow.add_theme_constant_override("separation", 5)
 	box.add_child(arow)
-	for o in _attack_tab(u):
+	var tab := _attack_tab(u)
+	for o in tab:
 		var action: Dictionary = o
-		arow.add_child(_slot_chip(_attack_chip_text(u, action), GameData.element_color(_action_element(u, action)) if _action_element(u, action) != "" else UIKit.GOLD))
-	# 소지품 3칸
+		arow.add_child(_attack_chip(u, action))
+	for k in range(tab.size(), 3):
+		arow.add_child(_slot_chip(_locked_text(u, k), Color(0.3, 0.32, 0.4)))
+	if not range_preview.is_empty() and range_preview.get("unit") == u:
+		box.add_child(UIKit.label(_range_detail(u, range_preview["action"]), 15, Color(1.0, 0.92, 0.6)))
+	# 소지품
+	box.add_child(UIKit.label("소지품", 13, UIKit.MUTED))
 	var irow := HBoxContainer.new()
-	irow.add_theme_constant_override("separation", 4)
+	irow.add_theme_constant_override("separation", 5)
 	box.add_child(irow)
 	for o in s.items:
 		var iid := str(o)
-		var txt := "— 빈 칸 —"
-		var col := Color(0.35, 0.37, 0.45)
-		if iid != "":
-			var e: Dictionary = GameData.items[iid]
-			if GameData.item_kind(iid) == "tool":
-				txt = "%s\n도구" % e["name"]
-				col = COLOR_TOOL
-			else:
-				var b := GameData.bonus_text(e.get("bonus", {})).replace("체력", "HP").replace("마력", "MP").replace("공격", "공").replace("방어", "방").replace("속도", "속").replace("이동", "이")
-				if e.has("special"):
-					b += (" " if b != "" else "") + GameData.special_name(str(e["special"]))
-				txt = "%s\n%s" % [e["name"], b]
-				col = UIKit.GOLD.darkened(0.2)
-		irow.add_child(_slot_chip(txt, col))
+		if iid == "":
+			irow.add_child(_slot_chip("빈 칸", Color(0.3, 0.32, 0.4)))
+		else:
+			irow.add_child(_slot_chip(GameData.item_name(iid), COLOR_TOOL if GameData.item_kind(iid) == "tool" else UIKit.GOLD.darkened(0.2)))
+	# 작은 한 줄
+	var foot := ""
 	if u.is_summoner:
 		var m: Summoner = s
-		var counts := {}
-		for o in units:
-			var x: BattleUnit = o
-			if x.is_active() and x.team == u.team and not x.is_summoner:
-				counts[x.spirit.element()] = int(counts.get(x.spirit.element(), 0)) + 1
-		var parts := PackedStringArray()
-		for el in ["grass", "water", "wind", "fire"]:
-			parts.append("%s%d" % [GameData.element_name(el), int(counts.get(el, 0))])
 		var up := _upkeep_total(u.team)
 		var next := clampi(s.mp + m.mp_regen() - up, 0, s.max_mp())
-		box.add_child(UIKit.label("소환 정령 %s (%d/%d) · 다음 턴 MP %d/%d (+%d −%d)%s" % [" ".join(parts), _summoned_count(u.team), m.summon_limit(),
-			next, s.max_mp(), m.mp_regen(), up, "  ⚠MP부족" if s.mp + m.mp_regen() < up else ""], 16,
-			Color(1.0, 0.6, 0.5) if s.mp + m.mp_regen() < up else Color(0.75, 0.85, 1.0)))
-	var tid := grid.terrain_at(u.cell)
-	box.add_child(UIKit.label("지형: %s %s" % [GameData.terrain_name(tid), GameData.grade_mark(_terrain_grade(u))], 15, UIKit.MUTED))
+		foot = "소환 %d/%d · 다음 턴 MP %d (+%d −%d)%s" % [_summoned_count(u.team), m.summon_limit(), next, m.mp_regen(), up,
+			" ⚠MP부족" if s.mp + m.mp_regen() < up else ""]
+	else:
+		foot = "♥ %d · 유지 MP %d" % [s.affinity, s.upkeep()]
+		if u.team == 0:
+			foot += " · EXP %d/%d" % [s.xp, s.xp_to_next()]
+	foot += " · 지형 %s %s" % [GameData.terrain_name(grid.terrain_at(u.cell)), GameData.grade_mark(_terrain_grade(u))]
+	box.add_child(UIKit.label(foot, 14, UIKit.MUTED))
 	return box
 
 
-func _attack_chip_text(u: BattleUnit, action: Dictionary) -> String:
+func _tag(text: String, col: Color) -> Control:
+	var p := PanelContainer.new()
+	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var st := StyleBoxFlat.new()
+	st.bg_color = col
+	st.set_corner_radius_all(9)
+	st.content_margin_left = 7
+	st.content_margin_right = 7
+	p.add_theme_stylebox_override("panel", st)
+	var l := UIKit.label(text, 13, Color.WHITE)
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF
+	p.add_child(l)
+	return p
+
+
+func _stat_box(name_text: String, v: int) -> Control:
+	var p := PanelContainer.new()
+	p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.105, 0.12, 0.17)
+	st.set_corner_radius_all(8)
+	st.content_margin_top = 2
+	st.content_margin_bottom = 2
+	p.add_theme_stylebox_override("panel", st)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", -2)
+	p.add_child(vb)
+	var n := UIKit.label(str(v), 20, Color.WHITE, true)
+	n.autowrap_mode = TextServer.AUTOWRAP_OFF
+	vb.add_child(n)
+	var l := UIKit.label(name_text, 12, UIKit.MUTED, true)
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF
+	vb.add_child(l)
+	return p
+
+
+## 공격 칩: 1줄 "이름 (MP n)", 2줄 "위력 · 기본 명중%" (디스펠은 "기본 n%"). 누르면 맵에 사거리
+func _attack_chip(u: BattleUnit, action: Dictionary) -> Button:
+	var mp := _action_mp(u, action)
+	var title := _action_name(u, action) + ((" (MP%d)" % mp) if mp > 0 else "")
+	var line2 := ""
 	match str(action.get("type", "")):
 		"attack":
-			return "기본 공격\n명중%d 위력%d 사1" % [int(90 + u.spirit.level * 0.5), _attack_power(u)]
-		"dispel":
-			return "디스펠 GET\nMP%d 사%d" % [GameState.summoner.dispel_cost(), GameState.summoner.dispel_range()]
+			line2 = "위력 %d · %d%%" % [_attack_power(u), int(min(99.0, 90.0 + u.spirit.level * 0.5))]
 		"skill":
 			var sk: Dictionary = GameData.skills[action["skill_id"]]
-			return "%s\n명중%d 위력%d 사%d-%d MP%d" % [sk["name"], int(sk.get("hit", 80)), int(sk["power"]), int(sk["range_min"]), int(sk["range_max"]), int(sk["mp"])]
+			line2 = "위력 %d · %d%%" % [int(sk["power"]), int(sk.get("hit", 80))]
 		"sskill":
 			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
-			return "%s\n명중%d 위력%d MP%d" % [ssk["name"], int(ssk.get("hit", 85)), int(ssk.get("power", 0)), int(ssk["mp"])]
-	return ""
+			line2 = "위력 %d · %d%%" % [_ssk_power(u, ssk), int(ssk.get("hit", 85))]
+		"dispel":
+			var m := u.spirit as Summoner
+			line2 = "기본 %d%%" % int(round((m.dispel_base() if m != null else 0.15) * 100.0))
+	var el := _action_element(u, action)
+	var col := GameData.element_color(el) if el != "" else UIKit.GOLD
+	var b := Button.new()
+	b.text = "%s\n%s" % [title, line2]
+	b.focus_mode = Control.FOCUS_NONE
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.custom_minimum_size = Vector2(0, 48)
+	b.clip_text = true
+	b.add_theme_font_size_override("font_size", 14)
+	b.add_theme_color_override("font_color", Color.WHITE)
+	var sel: bool = not range_preview.is_empty() and range_preview.get("unit") == u and (range_preview["action"] as Dictionary).hash() == action.hash()
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(col, 0.2)
+	st.border_color = UIKit.GOLD if sel else Color(col, 0.85)
+	st.set_border_width_all(3 if sel else 1)
+	st.set_corner_radius_all(8)
+	for k in ["normal", "hover", "pressed"]:
+		b.add_theme_stylebox_override(k, st)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.pressed.connect(_toggle_range_preview.bind(u, action))
+	return b
+
+
+func _locked_text(u: BattleUnit, k: int) -> String:
+	if u.is_summoner:
+		return "—"
+	var ups := u.spirit.upcoming_skills()
+	var idx := k - 1 - u.spirit.known_skills().size()
+	if idx >= 0 and idx < ups.size():
+		return "🔒 Lv.%d" % int(ups[idx]["level"])
+	return "🔒 진화 후" if not u.spirit.next_evolution().is_empty() else "—"
+
+
+func _toggle_range_preview(u: BattleUnit, action: Dictionary) -> void:
+	if not range_preview.is_empty() and range_preview.get("unit") == u and (range_preview["action"] as Dictionary).hash() == action.hash():
+		_clear_range_preview()
+	else:
+		range_preview = {"unit": u, "action": action}
+		preview_range_cells = _action_range_cells(u, action)
+	_mark_ui()
+	queue_redraw()
+
+
+func _clear_range_preview() -> void:
+	range_preview = {}
+	preview_range_cells = {}
+
+
+## 그 유닛 자리에서 이 공격이 닿는 칸 (적이 없어도 칸 전부)
+func _action_range_cells(u: BattleUnit, action: Dictionary) -> Dictionary:
+	var rr := _action_range(u, action)
+	var out := {}
+	for row in ROWS:
+		for col in COLS:
+			var c := Vector2i(col, row)
+			var d := grid.distance(u.cell, c)
+			if d >= rr.x and d <= rr.y and not grid.blocked.has(c):
+				out[c] = true
+	return out
+
+
+func _action_range(u: BattleUnit, action: Dictionary) -> Vector2i:
+	match str(action.get("type", "")):
+		"skill":
+			var sk: Dictionary = GameData.skills[action["skill_id"]]
+			return Vector2i(int(sk["range_min"]), int(sk["range_max"]))
+		"sskill":
+			var ssk: Dictionary = GameData.summoner_skills[action["skill_id"]]
+			return Vector2i(int(ssk.get("range_min", 1)), int(ssk.get("range_max", 1)))
+		"dispel":
+			return Vector2i(1, GameState.summoner.dispel_range())
+	return Vector2i(1, BattleLogic.BASIC_ATTACK_RANGE)
+
+
+func _range_detail(u: BattleUnit, action: Dictionary) -> String:
+	var rr := _action_range(u, action)
+	var rtxt := ("사거리 %d" % rr.y) if rr.x == rr.y else ("사거리 %d~%d" % [rr.x, rr.y])
+	var extra := ""
+	match str(action.get("type", "")):
+		"attack":
+			extra = "바로 옆 적만. 맞고 버틴 적은 반격"
+		"skill":
+			var sk: Dictionary = GameData.skills[action["skill_id"]]
+			extra = str(sk.get("desc", ""))
+			if sk.has("status"):
+				extra += " · %s %d%%" % [BattleUnit.STATUS_NAMES.get(str(sk["status"]["type"]), ""), int(sk["status"]["chance"])]
+		"sskill":
+			extra = str(GameData.summoner_skills[action["skill_id"]].get("desc", ""))
+		"dispel":
+			extra = "약해진 정령일수록 잘 걸림"
+	return "%s %s (맵에 노란 칸) — %s" % [_action_name(u, action), rtxt, extra]
+
+
+func _info_panel_on() -> bool:
+	return bool(GameState.flags.get("unit_panel", true))
+
+
+func _toggle_info_panel() -> void:
+	GameState.flags["unit_panel"] = not _info_panel_on()
+	if not _info_panel_on():
+		_clear_range_preview()
+	_mark_ui()
 
 
 func _slot_chip(text: String, col: Color) -> Control:
